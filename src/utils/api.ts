@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import { supabase } from "../lib/supabase";
 import type { ProjectEntry, WorkEntry, SkillsMap } from "../data/resumeData";
 
 export interface ResumeState {
@@ -7,11 +7,6 @@ export interface ResumeState {
     skills: SkillsMap;
     work: WorkEntry[];
 }
-
-const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL,
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-);
 
 export async function loadState(): Promise<ResumeState | null> {
     try {
