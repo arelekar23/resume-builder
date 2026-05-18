@@ -14,7 +14,7 @@ import JDAnalysisTab from "./../components/JDAnalysisTab";
 import ProjectsTab from "./../components/ProjectsTab";
 import ExperienceTab from "./../components/ExperienceTab";
 import SkillsTab from "./../components/SkillsTab";
-import { Button } from "@/components/ui/button";
+// import { Button } from "@/components/ui/button";
 import { useAuth } from "@/contexts/AuthContext";
 
 type Tab = "jd" | "projects" | "experience" | "skills";
