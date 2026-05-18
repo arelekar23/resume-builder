@@ -30,9 +30,36 @@ export default function generateResumeHTML(
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <link href="https://fonts.googleapis.com/css?family=Calibri:400,700,400italic,700italic" rel="stylesheet">
   <title>Adwait Pradip Relekar</title>
   <style>
+  @font-face {
+    font-family: 'Calibri';
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+    src: url('/fonts/calibri-regular.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Calibri';
+    font-style: normal;
+    font-weight: 700;
+    font-display: block;
+    src: url('/fonts/calibri-bold.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Calibri';
+    font-style: italic;
+    font-weight: 400;
+    font-display: block;
+    src: url('/fonts/calibri-italic.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Calibri';
+    font-style: italic;
+    font-weight: 700;
+    font-display: block;
+    src: url('/fonts/calibri-bold-italic.woff2') format('woff2');
+  }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: 'Calibri','Carlito',sans-serif; font-size: 11pt; line-height: 1.2; color: #000; background: #fff; text-align: justify; }
     .page { width: 8.5in; height: 11in; max-height: 11in; overflow: hidden; margin: 0 auto; padding: 0.3in 0.3in 0.56in 0.3in; }
