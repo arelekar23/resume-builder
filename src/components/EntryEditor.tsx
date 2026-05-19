@@ -15,13 +15,20 @@ export default function EntryEditor({
   onDelete,
 }: EntryEditorProps) {
   function updateBullet(i: number, v: string) {
-    const b = [...entry.bullets];
-    b[i] = v;
+    const b = entry.bullets.map((bullet, j) =>
+      j === i ? { ...bullet, text: v } : bullet,
+    );
     onChange({ ...entry, bullets: b });
   }
 
   function addBullet() {
-    onChange({ ...entry, bullets: [...entry.bullets, "New bullet point"] });
+    onChange({
+      ...entry,
+      bullets: [
+        ...entry.bullets,
+        { id: crypto.randomUUID(), text: "New bullet point" },
+      ],
+    });
   }
 
   function removeBullet(i: number) {
@@ -66,7 +73,7 @@ export default function EntryEditor({
       </div>
       {entry.bullets.map((b, i) => (
         <div
-          key={i}
+          key={b.id}
           style={{
             display: "flex",
             alignItems: "flex-start",
@@ -78,7 +85,7 @@ export default function EntryEditor({
             •
           </span>
           <div style={{ flex: 1 }}>
-            <InlineText value={b} onChange={(v) => updateBullet(i, v)} />
+            <InlineText value={b.text} onChange={(v) => updateBullet(i, v)} />
           </div>
           <button
             onClick={() => removeBullet(i)}

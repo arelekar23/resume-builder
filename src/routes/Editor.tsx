@@ -1,8 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import {
-  INIT_PROJECTS,
-  INIT_SKILLS,
-  INIT_WORK,
   type ProjectEntry,
   type WorkEntry,
   type SkillsMap,
@@ -21,14 +18,10 @@ type Tab = "jd" | "projects" | "experience" | "skills";
 
 export default function Editor() {
   const [tab, setTab] = useState<Tab>("jd");
-  const [selectedProjects, setSelectedProjects] = useState<string[]>([
-    "mealmind",
-    "shiftbot",
-    "credify",
-  ]);
-  const [projects, setProjects] = useState<ProjectEntry[]>(INIT_PROJECTS);
-  const [skills, setSkills] = useState<SkillsMap>(INIT_SKILLS);
-  const [work, setWork] = useState<WorkEntry[]>(INIT_WORK);
+  const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+  const [projects, setProjects] = useState<ProjectEntry[]>([]);
+  const [skills, setSkills] = useState<SkillsMap>({});
+  const [work, setWork] = useState<WorkEntry[]>([]);
   const [overflowWarning, setOverflowWarning] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -99,8 +92,20 @@ export default function Editor() {
       )
         return;
     }
+
+    const originalTitle = document.title;
+    document.title = "AdwaitRelekar_Resume";
+
     iframeRef.current?.contentWindow?.focus();
     iframeRef.current?.contentWindow?.print();
+
+    // Restore after the print dialog is dismissed.
+    // afterprint fires whether the user saved or cancelled.
+    const restore = () => {
+      document.title = originalTitle;
+      window.removeEventListener("afterprint", restore);
+    };
+    window.addEventListener("afterprint", restore);
   }
 
   function toggleProject(id: string) {
@@ -121,14 +126,37 @@ export default function Editor() {
   }
 
   function addProject() {
-    const id = "proj_" + Date.now();
+    const id = crypto.randomUUID();
     setProjects((prev) => [
       ...prev,
       {
         id,
         title: "New Project (Tech Stack)",
         date: "Jan 2026",
-        bullets: ["Describe what you built and the impact"],
+        bullets: [
+          {
+            id: crypto.randomUUID(),
+            text: "Describe what you built and the impact",
+          },
+        ],
+      },
+    ]);
+  }
+
+  function addWork() {
+    const id = crypto.randomUUID();
+    setWork((prev) => [
+      ...prev,
+      {
+        id,
+        title: "Job Title, Company, Location",
+        date: "Jan 2024 – Present",
+        bullets: [
+          {
+            id: crypto.randomUUID(),
+            text: "Describe your responsibilities and impact",
+          },
+        ],
       },
     ]);
   }
@@ -140,19 +168,6 @@ export default function Editor() {
 
   function deleteWork(id: string) {
     setWork((prev) => prev.filter((j) => j.id !== id));
-  }
-
-  function addWork() {
-    const id = "work_" + Date.now();
-    setWork((prev) => [
-      ...prev,
-      {
-        id,
-        title: "Job Title, Company, Location",
-        date: "Jan 2024 – Present",
-        bullets: ["Describe your responsibilities and impact"],
-      },
-    ]);
   }
 
   const tabStyle = (t: Tab) => ({
