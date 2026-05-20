@@ -4,26 +4,27 @@ export default function generateResumeHTML(
   selectedProjects: string[],
   allProjects: ProjectEntry[],
   skills: SkillsMap,
-  workExp: WorkEntry[]
+  workExp: WorkEntry[],
+  excludedBullets: Set<string>,
 ): string {
   const selObjs = allProjects.filter((p) => selectedProjects.includes(p.id));
 
   const projectsHTML = selObjs
-    .map(
-      (p) =>
-        `<div class="project-entry"><div class="project-row"><span class="project-title">${p.title}</span><span class="project-date">${p.date}</span></div><ul class="project-bullets">${p.bullets.map((b) => `<li>${b.text}</li>`).join("")}</ul></div>`
-    )
-    .join("");
+    .map((p) => {
+      const bullets = p.bullets.filter((b) => !excludedBullets.has(b.id));
+      return `<div class="project-entry"><div class="project-row"><span class="project-title">${p.title}</span><span class="project-date">${p.date}</span></div><ul class="project-bullets">${bullets.map((b) => `<li>${b.text}</li>`).join("")}</ul></div>`;
+    })
+    .join("")
 
   const skillsHTML = Object.entries(skills)
     .map(([k, v]) => `<tr><td>${k}:</td><td>${v}</td></tr>`)
     .join("");
 
   const workHTML = workExp
-    .map(
-      (j) =>
-        `<div class="job-entry"><div class="job-row"><span class="job-title">${j.title}</span><span class="job-date">${j.date}</span></div><ul class="job-bullets">${j.bullets.map((b) => `<li>${b.text}</li>`).join("")}</ul></div>`
-    )
+    .map((j) => {
+      const bullets = j.bullets.filter((b) => !excludedBullets.has(b.id));
+      return `<div class="job-entry"><div class="job-row"><span class="job-title">${j.title}</span><span class="job-date">${j.date}</span></div><ul class="job-bullets">${bullets.map((b) => `<li>${b.text}</li>`).join("")}</ul></div>`;
+    })
     .join("");
 
   return `<!DOCTYPE html>

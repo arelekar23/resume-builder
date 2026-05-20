@@ -60,7 +60,7 @@ export async function loadState(): Promise<ResumeState | null> {
                 .order("position", { ascending: true }),
             supabase
                 .from("project_bullets")
-                .select("id, project_id, text, position")
+                .select("id, project_id, text, original_text,position")
                 .order("position", { ascending: true }),
             supabase
                 .from("work")
@@ -69,7 +69,7 @@ export async function loadState(): Promise<ResumeState | null> {
                 .order("position", { ascending: true }),
             supabase
                 .from("work_bullets")
-                .select("id, work_id, text, position")
+                .select("id, work_id, text, original_text, position")
                 .order("position", { ascending: true }),
             supabase
                 .from("skills")
@@ -92,14 +92,14 @@ export async function loadState(): Promise<ResumeState | null> {
         const projectBulletsByProject = new Map<string, Bullet[]>();
         for (const row of projectBulletRows ?? []) {
             const list = projectBulletsByProject.get(row.project_id) ?? [];
-            list.push({ id: row.id, text: row.text });
+            list.push({ id: row.id, text: row.text, original_text: row.original_text });
             projectBulletsByProject.set(row.project_id, list);
         }
 
         const workBulletsByJob = new Map<string, Bullet[]>();
         for (const row of workBulletRows ?? []) {
             const list = workBulletsByJob.get(row.work_id) ?? [];
-            list.push({ id: row.id, text: row.text });
+            list.push({ id: row.id, text: row.text, original_text: row.original_text });
             workBulletsByJob.set(row.work_id, list);
         }
 

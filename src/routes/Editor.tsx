@@ -26,7 +26,19 @@ export default function Editor() {
   const [loaded, setLoaded] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
+  const [excludedBullets, setExcludedBullets] = useState<Set<string>>(
+    new Set(),
+  );
 
+  function toggleBulletExcluded(id: string) {
+    setExcludedBullets((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    setTimeout(checkOverflow, 300);
+  }
   const { user, signOut } = useAuth();
   // --- Load persisted state on mount ---
   useEffect(() => {
@@ -66,6 +78,7 @@ export default function Editor() {
     sortedProjects,
     skills,
     work,
+    excludedBullets,
   );
 
   const checkOverflow = useCallback(() => {
@@ -136,7 +149,8 @@ export default function Editor() {
         bullets: [
           {
             id: crypto.randomUUID(),
-            text: "Describe what you built and the impact",
+            text: "",
+            original_text: "",
           },
         ],
       },
@@ -154,7 +168,8 @@ export default function Editor() {
         bullets: [
           {
             id: crypto.randomUUID(),
-            text: "Describe your responsibilities and impact",
+            text: "",
+            original_text: "",
           },
         ],
       },
@@ -310,6 +325,8 @@ export default function Editor() {
                 updateProject={updateProject}
                 deleteProject={deleteProject}
                 addProject={addProject}
+                excludedBullets={excludedBullets}
+                toggleBulletExcluded={toggleBulletExcluded}
               />
             )}
             {tab === "experience" && (
@@ -318,6 +335,8 @@ export default function Editor() {
                 updateWork={updateWork}
                 deleteWork={deleteWork}
                 addWork={addWork}
+                excludedBullets={excludedBullets}
+                toggleBulletExcluded={toggleBulletExcluded}
               />
             )}
             {tab === "skills" && (

@@ -1,4 +1,4 @@
-export type Bullet = { id: string; text: string };
+export type Bullet = { id: string; text: string; original_text: string };
 
 export interface ProjectEntry {
     id: string;

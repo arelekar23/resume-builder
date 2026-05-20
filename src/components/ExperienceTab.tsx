@@ -6,6 +6,8 @@ interface ExperienceTabProps {
   updateWork: (id: string, updated: WorkEntry) => void;
   deleteWork: (id: string) => void;
   addWork: () => void;
+  excludedBullets: Set<string>;
+  toggleBulletExcluded: (id: string) => void;
 }
 
 export default function ExperienceTab({
@@ -13,6 +15,8 @@ export default function ExperienceTab({
   updateWork,
   deleteWork,
   addWork,
+  excludedBullets,
+  toggleBulletExcluded,
 }: ExperienceTabProps) {
   return (
     <div>
@@ -25,6 +29,8 @@ export default function ExperienceTab({
           entry={j}
           onChange={(updated) => updateWork(j.id, updated as WorkEntry)}
           onDelete={() => deleteWork(j.id)}
+          excludedBullets={excludedBullets}
+          toggleBulletExcluded={toggleBulletExcluded}
         />
       ))}
       <button

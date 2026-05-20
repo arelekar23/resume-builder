@@ -5,6 +5,7 @@ interface InlineTextProps {
   onChange: (v: string) => void;
   bold?: boolean;
   style?: CSSProperties;
+  placeholder?: string;
 }
 
 export default function InlineText({
@@ -12,6 +13,7 @@ export default function InlineText({
   onChange,
   bold = false,
   style = {},
+  placeholder = "click to edit",
 }: InlineTextProps) {
   const [editing, setEditing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -35,7 +37,7 @@ export default function InlineText({
       .replace(/<strong>(.*?)<\/strong>/gi, "<b>$1</b>")
       .replace(
         /<span style="font-weight: ?(bold|700);?">(.*?)<\/span>/gi,
-        "<b>$2</b>"
+        "<b>$2</b>",
       )
       .replace(/&nbsp;/g, " ")
       .replace(/<br\s*\/?>/gi, " ")
@@ -126,7 +128,7 @@ export default function InlineText({
       dangerouslySetInnerHTML={{
         __html:
           value ||
-          '<span style="color:#aaa;font-style:italic">click to edit</span>',
+          `<span style="color:#aaa;font-style:italic">${placeholder}</span>`,
       }}
     />
   );
