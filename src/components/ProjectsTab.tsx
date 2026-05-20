@@ -9,6 +9,8 @@ interface ProjectsTabProps {
   updateProject: (id: string, updated: ProjectEntry) => void;
   deleteProject: (id: string) => void;
   addProject: () => void;
+  excludedBullets: Set<string>;
+  toggleBulletExcluded: (id: string) => void;
 }
 
 export default function ProjectsTab({
@@ -18,6 +20,8 @@ export default function ProjectsTab({
   updateProject,
   deleteProject,
   addProject,
+  excludedBullets,
+  toggleBulletExcluded,
 }: ProjectsTabProps) {
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
 
@@ -120,6 +124,8 @@ export default function ProjectsTab({
                     updateProject(p.id, updated as ProjectEntry)
                   }
                   onDelete={() => deleteProject(p.id)}
+                  excludedBullets={excludedBullets}
+                  toggleBulletExcluded={toggleBulletExcluded}
                 />
               </div>
             )}
