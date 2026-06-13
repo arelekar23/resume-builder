@@ -29,6 +29,7 @@ export default function Editor() {
   const [excludedBullets, setExcludedBullets] = useState<Set<string>>(
     new Set(),
   );
+  const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
 
   function toggleBulletExcluded(id: string) {
     setExcludedBullets((prev) => {
@@ -40,7 +41,7 @@ export default function Editor() {
     setTimeout(checkOverflow, 300);
   }
   const { user, signOut } = useAuth();
-  // --- Load persisted state on mount ---
+
   useEffect(() => {
     loadState().then((state) => {
       if (state) {
@@ -48,6 +49,8 @@ export default function Editor() {
         setProjects(state.projects);
         setSkills(state.skills);
         setWork(state.work);
+        setSelectedSkills(state.selected_skills ?? []);
+        setExcludedBullets(new Set(state.excluded_bullets ?? []));
       }
       setLoaded(true);
     });
@@ -61,6 +64,8 @@ export default function Editor() {
     saveTimer.current = setTimeout(() => {
       saveState({
         selected_projects: selectedProjects,
+        selected_skills: selectedSkills,
+        excluded_bullets: [...excludedBullets],
         projects,
         skills,
         work,
@@ -70,11 +75,20 @@ export default function Editor() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [selectedProjects, projects, skills, work, loaded]);
+  }, [
+    selectedProjects,
+    selectedSkills,
+    excludedBullets,
+    projects,
+    skills,
+    work,
+    loaded,
+  ]);
 
   const sortedProjects = sortByDateDesc(projects);
   const resumeHTML = generateResumeHTML(
     selectedProjects,
+    selectedSkills,
     sortedProjects,
     skills,
     work,
@@ -88,7 +102,7 @@ export default function Editor() {
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
       const page = doc?.querySelector(".page");
       if (!page) return false;
-      const isOver = page.scrollHeight > page.clientHeight;
+      const isOver = page.scrollHeight > page.clientHeight + 2;
       setOverflowWarning(isOver);
       return isOver;
     } catch {
@@ -127,7 +141,11 @@ export default function Editor() {
     );
     setTimeout(checkOverflow, 300);
   }
-
+  function toggleSkill(key: string) {
+    setSelectedSkills((prev) =>
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+    );
+  }
   function updateProject(id: string, updated: ProjectEntry) {
     setProjects((prev) => prev.map((p) => (p.id === id ? updated : p)));
     setTimeout(checkOverflow, 300);
@@ -183,6 +201,33 @@ export default function Editor() {
 
   function deleteWork(id: string) {
     setWork((prev) => prev.filter((j) => j.id !== id));
+  }
+
+  function reorderProjects(oldIndex: number, newIndex: number) {
+    setProjects((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(oldIndex, 1);
+      next.splice(newIndex, 0, moved);
+      return next;
+    });
+  }
+
+  function reorderWork(oldIndex: number, newIndex: number) {
+    setWork((prev) => {
+      const next = [...prev];
+      const [moved] = next.splice(oldIndex, 1);
+      next.splice(newIndex, 0, moved);
+      return next;
+    });
+  }
+
+  function reorderSkills(oldIndex: number, newIndex: number) {
+    setSkills((prev) => {
+      const entries = Object.entries(prev);
+      const [moved] = entries.splice(oldIndex, 1);
+      entries.splice(newIndex, 0, moved);
+      return Object.fromEntries(entries);
+    });
   }
 
   const tabStyle = (t: Tab) => ({
@@ -327,6 +372,7 @@ export default function Editor() {
                 addProject={addProject}
                 excludedBullets={excludedBullets}
                 toggleBulletExcluded={toggleBulletExcluded}
+                reorderProjects={reorderProjects}
               />
             )}
             {tab === "experience" && (
@@ -337,10 +383,17 @@ export default function Editor() {
                 addWork={addWork}
                 excludedBullets={excludedBullets}
                 toggleBulletExcluded={toggleBulletExcluded}
+                reorderWork={reorderWork}
               />
             )}
             {tab === "skills" && (
-              <SkillsTab skills={skills} setSkills={setSkills} />
+              <SkillsTab
+                skills={skills}
+                setSkills={setSkills}
+                reorderSkills={reorderSkills}
+                selectedSkills={selectedSkills}
+                toggleSkill={toggleSkill}
+              />
             )}
           </div>
         </div>

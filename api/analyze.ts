@@ -11,24 +11,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     try {
-        const response = await fetch(
-            `${process.env.CEREBRAS_BASE_URL}/chat/completions`,
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${process.env.CEREBRAS_API_KEY}`,
-                },
-                body: JSON.stringify({
-                    model: process.env.CEREBRAS_MODEL,
-                    messages: [{ role: "user", content: prompt }],
-                    response_format: { type: "json_object" },
-                }),
-            }
-        );
+        const response = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "x-api-key": process.env.ANTHROPIC_API_KEY!,
+                "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+                model: process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6",
+                max_tokens: 4096,
+                messages: [{ role: "user", content: prompt }],
+            }),
+        });
 
         const text = await response.text();
-
         if (!response.ok) {
             return res.status(response.status).json({
                 error: text,
@@ -37,10 +34,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         const data = JSON.parse(text) as {
-            choices: { message: { content: string } }[];
+            content: { type: string; text: string }[];
         };
+        const out = data.content.find((b) => b.type === "text")?.text ?? "";
 
-        return res.status(200).json({ result: data.choices[0].message.content });
+        return res.status(200).json({ result: out });
     } catch (err) {
         return res.status(500).json({ error: (err as Error).message });
     }

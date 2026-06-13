@@ -2,6 +2,7 @@ import type { ProjectEntry, WorkEntry, SkillsMap } from "../data/resumeData";
 
 export default function generateResumeHTML(
   selectedProjects: string[],
+  selectedSkills: string[],
   allProjects: ProjectEntry[],
   skills: SkillsMap,
   workExp: WorkEntry[],
@@ -17,6 +18,7 @@ export default function generateResumeHTML(
     .join("")
 
   const skillsHTML = Object.entries(skills)
+    .filter(([k]) => selectedSkills.includes(k))
     .map(([k, v]) => `<tr><td>${k}:</td><td>${v}</td></tr>`)
     .join("");
 
@@ -63,7 +65,7 @@ export default function generateResumeHTML(
   }
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { 
-    font-family: 'Calibri','Carlito',sans-serif; font-size: 11pt; line-height: 1.2; color: #000; background: #fff; text-align: justify; text-align: justify;
+    font-family: 'Calibri','Carlito',sans-serif; font-size: 11pt; line-height: 1.2; color: #000; background: #fff; text-align: justify;
 text-justify: inter-word;
 word-spacing: -0.01em;}
     .page { width: 8.5in; height: 11in; max-height: 11in; overflow: hidden; margin: 0 auto; padding: 0.3in 0.3in 0.56in 0.3in; }
