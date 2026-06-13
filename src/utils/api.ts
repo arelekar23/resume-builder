@@ -3,16 +3,20 @@ import type { ProjectEntry, WorkEntry, SkillsMap, Bullet } from "../data/resumeD
 
 export interface ResumeState {
     selected_projects: string[];
+    selected_skills: string[];
     projects: ProjectEntry[];
     skills: SkillsMap;
     work: WorkEntry[];
+    excluded_bullets: string[];
 }
 
 const EMPTY_STATE: ResumeState = {
     selected_projects: [],
+    selected_skills: [],
     projects: [],
     skills: {},
     work: [],
+    excluded_bullets: []
 };
 
 // Snapshot of the last state we loaded or successfully saved.
@@ -60,7 +64,7 @@ export async function loadState(): Promise<ResumeState | null> {
                 .order("position", { ascending: true }),
             supabase
                 .from("project_bullets")
-                .select("id, project_id, text, original_text,position")
+                .select("id, project_id, text, original_text,position, is_excluded")
                 .order("position", { ascending: true }),
             supabase
                 .from("work")
@@ -69,11 +73,11 @@ export async function loadState(): Promise<ResumeState | null> {
                 .order("position", { ascending: true }),
             supabase
                 .from("work_bullets")
-                .select("id, work_id, text, original_text, position")
+                .select("id, work_id, text, original_text, position, is_excluded")
                 .order("position", { ascending: true }),
             supabase
                 .from("skills")
-                .select("category, items, position")
+                .select("category, items, position, is_selected")
                 .eq("profile_id", profileId)
                 .order("position", { ascending: true }),
         ]);
@@ -103,6 +107,11 @@ export async function loadState(): Promise<ResumeState | null> {
             workBulletsByJob.set(row.work_id, list);
         }
 
+        const excluded_bullets: string[] = [
+            ...(projectBulletRows ?? []).filter((b) => b.is_excluded).map((b) => b.id),
+            ...(workBulletRows ?? []).filter((b) => b.is_excluded).map((b) => b.id),
+        ];
+
         const projects: ProjectEntry[] = (projectRows ?? []).map((p) => ({
             id: p.id,
             title: p.title,
@@ -126,7 +135,11 @@ export async function loadState(): Promise<ResumeState | null> {
             skills[s.category] = s.items;
         }
 
-        const state: ResumeState = { selected_projects, projects, skills, work };
+        const selected_skills: string[] = (skillRows ?? [])
+            .filter((s) => s.is_selected)
+            .map((s) => s.category);
+
+        const state: ResumeState = { selected_projects, selected_skills, projects, skills, work, excluded_bullets };
         lastSaved = structuredClone(state);
         return state;
     } catch (e) {
@@ -229,9 +242,12 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 const prevBullet = prevById.get(b.id);
                                 if (!prevBullet) continue; // already handled by insert
                                 const prevIdx = prev.bullets.findIndex((q) => q.id === b.id);
+                                const isExcludedNow = state.excluded_bullets.includes(b.id);
+                                const wasExcluded = baseline.excluded_bullets.includes(b.id);
                                 const patch: Record<string, unknown> = {};
                                 if (prevBullet.text !== b.text) patch.text = b.text;
                                 if (prevIdx !== idx) patch.position = idx;
+                                if (wasExcluded !== isExcludedNow) patch.is_excluded = isExcludedNow;
                                 if (Object.keys(patch).length > 0) {
                                     await supabase
                                         .from("project_bullets")
@@ -252,6 +268,18 @@ export async function saveState(state: ResumeState): Promise<void> {
                             }
                         })(),
                     );
+                }
+                for (const b of p.bullets) {
+                    const isExcludedNow = state.excluded_bullets.includes(b.id);
+                    const wasExcluded = baseline.excluded_bullets.includes(b.id);
+                    if (wasExcluded !== isExcludedNow) {
+                        ops.push(
+                            supabase
+                                .from("project_bullets")
+                                .update({ is_excluded: isExcludedNow })
+                                .eq("id", b.id),
+                        );
+                    }
                 }
             }
         });
@@ -330,9 +358,12 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 const prevBullet = prevById.get(b.id);
                                 if (!prevBullet) continue; // already handled by insert
                                 const prevIdx = prev.bullets.findIndex((q) => q.id === b.id);
+                                const isExcludedNow = state.excluded_bullets.includes(b.id);
+                                const wasExcluded = baseline.excluded_bullets.includes(b.id);
                                 const patch: Record<string, unknown> = {};
                                 if (prevBullet.text !== b.text) patch.text = b.text;
                                 if (prevIdx !== idx) patch.position = idx;
+                                if (wasExcluded !== isExcludedNow) patch.is_excluded = isExcludedNow;
                                 if (Object.keys(patch).length > 0) {
                                     await supabase
                                         .from("work_bullets")
@@ -354,6 +385,18 @@ export async function saveState(state: ResumeState): Promise<void> {
                         })(),
                     );
                 }
+                for (const b of w.bullets) {
+                    const isExcludedNow = state.excluded_bullets.includes(b.id);
+                    const wasExcluded = baseline.excluded_bullets.includes(b.id);
+                    if (wasExcluded !== isExcludedNow) {
+                        ops.push(
+                            supabase
+                                .from("work_bullets")
+                                .update({ is_excluded: isExcludedNow })
+                                .eq("id", b.id),
+                        );
+                    }
+                }
             }
         });
 
@@ -372,6 +415,8 @@ export async function saveState(state: ResumeState): Promise<void> {
 
         currentCategories.forEach((category, idx) => {
             const items = state.skills[category];
+            const isSelectedNow = state.selected_skills.includes(category);
+
             if (!prevCategorySet.has(category)) {
                 ops.push(
                     supabase.from("skills").insert({
@@ -379,14 +424,17 @@ export async function saveState(state: ResumeState): Promise<void> {
                         category,
                         items,
                         position: idx,
+                        is_selected: isSelectedNow,
                     }),
                 );
             } else {
                 const prevItems = lastSaved!.skills[category];
+                const wasSelected = (lastSaved!.selected_skills ?? []).includes(category);
                 const prevIdx = prevCategories.indexOf(category);
                 const patch: Record<string, unknown> = {};
                 if (prevItems !== items) patch.items = items;
                 if (prevIdx !== idx) patch.position = idx;
+                if (wasSelected !== isSelectedNow) patch.is_selected = isSelectedNow;
                 if (Object.keys(patch).length > 0) {
                     ops.push(
                         supabase
