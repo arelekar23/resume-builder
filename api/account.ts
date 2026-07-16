@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 
-import { getUserId } from "./keyVault";
+import { getUserId } from "./keyVault.js";
 
 // Account deletion. Deletes the profile row (cascades to all user-owned data
 // incl. the encrypted LLM key), then the auth user itself.

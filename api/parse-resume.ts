@@ -6,8 +6,8 @@ import {
     isLLMUsable,
     callAnthropic,
     callOpenAICompatible,
-} from "./tailoring-graph";
-import { getUserId, loadUserKey } from "./keyVault";
+} from "./tailoring-graph.js";
+import { getUserId, loadUserKey } from "./keyVault.js";
 
 // Extracts an uploaded resume PDF into the master-resume schema. Uses unpdf for
 // text extraction (serverless-friendly, no worker setup); the client writes the

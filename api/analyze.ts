@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { createClient } from "@supabase/supabase-js";
 
-import { tailoringPrinciples } from "./guidance-files";
+import { tailoringPrinciples } from "./guidance-files.js";
 
 import {
     runTailoringGraph,
@@ -17,8 +17,8 @@ import {
     type MasterResume,
     type Selection,
     type ResumeView,
-} from "./tailoring-graph";
-import { getUserId, loadUserKey } from "./keyVault";
+} from "./tailoring-graph.js";
+import { getUserId, loadUserKey } from "./keyVault.js";
 
 // Master is never mutated by tailoring: returns a plan, doesn't write to the DB.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
