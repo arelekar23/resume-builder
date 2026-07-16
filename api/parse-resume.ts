@@ -77,12 +77,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!authHeader.startsWith("Bearer ")) {
         return res.status(401).json({ error: "Missing Authorization bearer token" });
     }
-    const userId = await getUserId(authHeader);
-    if (!userId) {
-        return res.status(401).json({ error: "Invalid or expired session." });
-    }
 
     try {
+        const userId = await getUserId(authHeader);
+        if (!userId) {
+            return res.status(401).json({ error: "Invalid or expired session." });
+        }
         // Key comes from the vault via the verified user id, never the request body.
         const llm = resolveLLM((await loadUserKey(userId)) ?? undefined);
         if (!isLLMUsable(llm)) {
