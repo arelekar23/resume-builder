@@ -5,7 +5,7 @@ import {
     saveUserKey,
     getUserKeyStatus,
     deleteUserKey,
-} from "./keyVault";
+} from "./keyVault.js";
 
 // BYO-key management. POST encrypts the raw key server-side; it's never
 // returned. GET reports non-secret status only. DELETE revokes the stored key.
