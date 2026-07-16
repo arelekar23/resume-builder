@@ -34,3 +34,4 @@ dist-ssr
 # Build/test artifacts
 coverage
 *.tsbuildinfo
+.env*

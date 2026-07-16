@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/analyze.ts": {
+      "includeFiles": "api/guidance/**"
+    }
+  }
+}

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, type CSSProperties } from "react";
+import { ec } from "../lib/editorTheme";
 
 interface InlineTextProps {
   value: string;
@@ -60,18 +61,18 @@ export default function InlineText({
     return (
       <div
         style={{
-          border: "1.5px solid #2563eb",
+          border: `1.5px solid ${ec.ring}`,
           borderRadius: 4,
           padding: "3px 6px",
-          background: "#fff",
+          background: ec.bg,
         }}
       >
-        <div style={{ fontSize: 11, color: "#94a3b8", marginBottom: 2 }}>
+        <div style={{ fontSize: 11, color: ec.faint, marginBottom: 2 }}>
           Select text +{" "}
           <kbd
             style={{
-              background: "#f1f5f9",
-              border: "1px solid #e2e8f0",
+              background: ec.muted,
+              border: `1px solid ${ec.border}`,
               borderRadius: 3,
               padding: "0 4px",
               fontSize: 11,
@@ -82,8 +83,8 @@ export default function InlineText({
           /{" "}
           <kbd
             style={{
-              background: "#f1f5f9",
-              border: "1px solid #e2e8f0",
+              background: ec.muted,
+              border: `1px solid ${ec.border}`,
               borderRadius: 3,
               padding: "0 4px",
               fontSize: 11,
@@ -103,6 +104,7 @@ export default function InlineText({
             minHeight: 32,
             outline: "none",
             fontSize: 12,
+            color: ec.fg,
             fontWeight: bold ? 700 : 400,
             wordBreak: "break-word",
             whiteSpace: "pre-wrap",
@@ -120,6 +122,7 @@ export default function InlineText({
         cursor: "text",
         borderRadius: 3,
         padding: "1px 3px",
+        color: ec.fg,
         fontWeight: bold ? 700 : 400,
         display: "block",
         wordBreak: "break-word",
@@ -128,7 +131,7 @@ export default function InlineText({
       dangerouslySetInnerHTML={{
         __html:
           value ||
-          `<span style="color:#aaa;font-style:italic">${placeholder}</span>`,
+          `<span style="color:${ec.faint};font-style:italic">${placeholder}</span>`,
       }}
     />
   );

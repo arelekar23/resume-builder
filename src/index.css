@@ -116,14 +116,14 @@ code {
 
 @import "shadcn/tailwind.css";
 
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --font-heading: var(--font-sans);
 
-  --font-sans: "Geist Variable", sans-serif;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
 
   --color-sidebar-ring: var(--sidebar-ring);
 
@@ -215,7 +215,8 @@ code {
 
   --popover-foreground: oklch(0.145 0 0);
 
-  --primary: oklch(0.205 0 0);
+  /* single brand accent: deep blue, over an otherwise neutral palette */
+  --primary: oklch(0.546 0.215 262.9);
 
   --primary-foreground: oklch(0.985 0 0);
 
@@ -237,7 +238,7 @@ code {
 
   --input: oklch(0.922 0 0);
 
-  --ring: oklch(0.708 0 0);
+  --ring: oklch(0.546 0.215 262.9);
 
   --chart-1: oklch(0.87 0 0);
 
@@ -281,9 +282,9 @@ code {
 
   --popover-foreground: oklch(0.985 0 0);
 
-  --primary: oklch(0.922 0 0);
+  --primary: oklch(0.62 0.19 262.9);
 
-  --primary-foreground: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
 
   --secondary: oklch(0.269 0 0);
 
