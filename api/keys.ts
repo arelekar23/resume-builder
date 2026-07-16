@@ -10,12 +10,12 @@ import {
 // BYO-key management. POST encrypts the raw key server-side; it's never
 // returned. GET reports non-secret status only. DELETE revokes the stored key.
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-    const userId = await getUserId(req.headers.authorization);
-    if (!userId) {
-        return res.status(401).json({ error: "Sign in to manage your API key." });
-    }
-
     try {
+        const userId = await getUserId(req.headers.authorization);
+        if (!userId) {
+            return res.status(401).json({ error: "Sign in to manage your API key." });
+        }
+
         if (req.method === "GET") {
             return res.status(200).json(await getUserKeyStatus(userId));
         }

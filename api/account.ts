@@ -11,18 +11,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(405).json({ error: "Method not allowed" });
     }
 
-    const userId = await getUserId(req.headers.authorization);
-    if (!userId) {
-        return res.status(401).json({ error: "Sign in to delete your account." });
-    }
-
-    const url = process.env.VITE_SUPABASE_URL;
-    const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !serviceRole) {
-        return res.status(500).json({ error: "Server misconfigured for account deletion." });
-    }
-
     try {
+        const userId = await getUserId(req.headers.authorization);
+        if (!userId) {
+            return res.status(401).json({ error: "Sign in to delete your account." });
+        }
+
+        const url = process.env.VITE_SUPABASE_URL;
+        const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
+        if (!url || !serviceRole) {
+            return res.status(500).json({ error: "Server misconfigured for account deletion." });
+        }
+
         const admin = createClient(url, serviceRole, {
             auth: { persistSession: false, autoRefreshToken: false },
         });
