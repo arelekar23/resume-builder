@@ -6,30 +6,110 @@ import {
 } from "./../data/resumeData";
 import generateResumeHTML from "./../utils/generateResumeHTML";
 import { sortByDateDesc } from "./../utils/sortByDate";
-import { loadState, saveState } from "./../utils/api";
+import { loadState, saveState, type ResumeState } from "./../utils/api";
+import {
+  getProfile,
+  listEducation,
+  EMPTY_PERSONAL_INFO,
+  type PersonalInfo,
+  type EducationRow,
+} from "./../utils/profile";
+import {
+  listVersions,
+  saveVersion,
+  saveVersionState,
+  buildVersionEditorState,
+  renameVersion,
+  duplicateVersion,
+  deleteVersion,
+  type ResumeVersion,
+} from "./../utils/versions";
+import {
+  applyPlanToMaster,
+  type TailoringPlanOverlay,
+} from "./../utils/versionConversion";
 import JDAnalysisTab from "./../components/JDAnalysisTab";
+import GuidedTailor from "./../components/GuidedTailor";
+import ApiSettings from "./../components/ApiSettings";
 import ProjectsTab from "./../components/ProjectsTab";
 import ExperienceTab from "./../components/ExperienceTab";
 import SkillsTab from "./../components/SkillsTab";
-// import { Button } from "@/components/ui/button";
+import VersionBar from "./../components/VersionBar";
+import ResumeUpload from "./../components/ResumeUpload";
 import { useAuth } from "@/contexts/AuthContext";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import {
+  Download,
+  LogOut,
+  FolderGit2,
+  Briefcase,
+  Wrench,
+  AlertTriangle,
+  CheckCircle2,
+  Sparkles,
+  UserRound,
+} from "lucide-react";
+import { Link } from "react-router-dom";
 
-type Tab = "jd" | "projects" | "experience" | "skills";
+type Section = "projects" | "experience" | "skills";
+
+// Persist active version across reloads (token refresh shouldn't drop to Master).
+const ACTIVE_VERSION_KEY = "resumeBuilder.activeVersionId";
+
+function sanitizeCompany(company: string | null): string {
+  if (!company || !company.trim()) return "General";
+  return (
+    company
+      .trim()
+      .replace(/\s+/g, "_")
+      .replace(/[^A-Za-z0-9_-]/g, "") || "General"
+  );
+}
+
+function namePrefix(fullName: string): string {
+  return fullName.replace(/[^A-Za-z0-9]/g, "") || "Resume";
+}
 
 export default function Editor() {
-  const [tab, setTab] = useState<Tab>("jd");
+  const [section, setSection] = useState<Section>("skills");
+  const [tailorMode, setTailorMode] = useState<"quick" | "guided">("quick");
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [skills, setSkills] = useState<SkillsMap>({});
   const [work, setWork] = useState<WorkEntry[]>([]);
+  // Personal info + education come from the DB (the Profile page edits them).
+  const [personal, setPersonal] = useState<PersonalInfo>(EMPTY_PERSONAL_INFO);
+  const [education, setEducation] = useState<EducationRow[]>([]);
   const [overflowWarning, setOverflowWarning] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
-  const [excludedBullets, setExcludedBullets] = useState<Set<string>>(
-    new Set(),
+  const [onboardDismissed, setOnboardDismissed] = useState(false);
+  const [activeCompany, setActiveCompany] = useState<string | null>(null);
+  // null = Master (edits go to tables); a version = edits go to its snapshot.
+  const [activeVersionId, setActiveVersionId] = useState<string | null>(
+    () => localStorage.getItem(ACTIVE_VERSION_KEY),
   );
+  const activeVersionIdRef = useRef<string | null>(activeVersionId);
+  const [versions, setVersions] = useState<ResumeVersion[]>([]);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const previewPaneRef = useRef<HTMLDivElement>(null);
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
+  const [excludedBullets, setExcludedBullets] = useState<Set<string>>(new Set());
   const [selectedSkills, setSelectedSkills] = useState<string[]>([]);
+  // Letter page is 8.5in wide (816px @96dpi); scale preview to fit the pane.
+  const PAGE_W = 8.5 * 96;
+  const [previewScale, setPreviewScale] = useState(0.6);
+
+  const { user, signOut } = useAuth();
 
   function toggleBulletExcluded(id: string) {
     setExcludedBullets((prev) => {
@@ -40,50 +120,300 @@ export default function Editor() {
     });
     setTimeout(checkOverflow, 300);
   }
-  const { user, signOut } = useAuth();
 
-  useEffect(() => {
-    loadState().then((state) => {
-      if (state) {
-        setSelectedProjects(state.selected_projects);
-        setProjects(state.projects);
-        setSkills(state.skills);
-        setWork(state.work);
-        setSelectedSkills(state.selected_skills ?? []);
-        setExcludedBullets(new Set(state.excluded_bullets ?? []));
-      }
-      setLoaded(true);
-    });
+  const applyState = useCallback((state: ResumeState) => {
+    setSelectedProjects(state.selected_projects);
+    setProjects(state.projects);
+    setSkills(state.skills);
+    setWork(state.work);
+    setSelectedSkills(state.selected_skills ?? []);
+    setExcludedBullets(new Set(state.excluded_bullets ?? []));
   }, []);
 
-  // --- Auto-save with debounce ---
+  // Reload the active source. Reads id from a ref to stay stable across changes.
+  const refresh = useCallback(async () => {
+    const master = await loadState();
+    if (!master) {
+      setLoaded(true);
+      return;
+    }
+    const id = activeVersionIdRef.current;
+    let state = master;
+    if (id) {
+      const v = await buildVersionEditorState(id, master);
+      if (v) state = v;
+      else {
+        // version was deleted elsewhere — fall back to Master
+        activeVersionIdRef.current = null;
+        setActiveVersionId(null);
+        setActiveCompany(null);
+        localStorage.removeItem(ACTIVE_VERSION_KEY);
+      }
+    }
+    applyState(state);
+    setLoaded(true);
+  }, [applyState]);
+
+  const refreshVersions = useCallback(async () => {
+    setVersions(await listVersions());
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    refreshVersions();
+  }, [refresh, refreshVersions]);
+
+  // Sync active company label once versions load.
+  useEffect(() => {
+    if (!activeVersionId || versions.length === 0) return;
+    const v = versions.find((x) => x.id === activeVersionId);
+    if (v) setActiveCompany(v.company_name ?? null);
+  }, [activeVersionId, versions]);
+
+  // Profile-level (shared across versions). Reload on focus to pick up Profile edits.
+  const loadProfile = useCallback(async () => {
+    const [info, edu] = await Promise.all([getProfile(), listEducation()]);
+    setPersonal(info);
+    setEducation(edu);
+  }, []);
+
+  useEffect(() => {
+    loadProfile();
+    window.addEventListener("focus", loadProfile);
+    return () => window.removeEventListener("focus", loadProfile);
+  }, [loadProfile]);
+
+  useEffect(() => {
+    const pane = previewPaneRef.current;
+    if (!pane) return;
+    const update = () => {
+      const avail = pane.clientWidth - 32;
+      setPreviewScale(Math.max(0.3, Math.min(1, avail / PAGE_W)));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(pane);
+    return () => ro.disconnect();
+  }, [PAGE_W, loaded]);
+
+  const currentResumeState = useCallback(
+    (): ResumeState => ({
+      selected_projects: selectedProjects,
+      selected_skills: selectedSkills,
+      excluded_bullets: [...excludedBullets],
+      projects,
+      skills,
+      work,
+    }),
+    [selectedProjects, selectedSkills, excludedBullets, projects, skills, work],
+  );
+
+  // Save to the active source only (Master tables, diff-based; or version snapshot).
+  const persist = useCallback(async () => {
+    const st = currentResumeState();
+    if (activeVersionId) await saveVersionState(activeVersionId, st);
+    else await saveState(st);
+  }, [currentResumeState, activeVersionId]);
+
+  // Debounced autosave.
   useEffect(() => {
     if (!loaded) return;
-
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      saveState({
-        selected_projects: selectedProjects,
-        selected_skills: selectedSkills,
-        excluded_bullets: [...excludedBullets],
-        projects,
-        skills,
-        work,
-      });
+      persist();
     }, 800);
-
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [
-    selectedProjects,
-    selectedSkills,
-    excludedBullets,
-    projects,
-    skills,
-    work,
-    loaded,
-  ]);
+  }, [persist, loaded]);
+
+  // Flush any pending autosave immediately — used before switching sources.
+  const flushSave = useCallback(async () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    await persist();
+  }, [persist]);
+
+  // Flush pending autosave on hide/close — otherwise a reload loses the last
+  // edit (the "unchecked items come back" bug).
+  useEffect(() => {
+    const flush = () => {
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+        void persist();
+      }
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [persist]);
+
+  // Switch active source (null = Master); flush current first, load target in memory.
+  const switchTo = useCallback(
+    async (id: string | null) => {
+      await flushSave();
+      activeVersionIdRef.current = id;
+      setActiveVersionId(id);
+      if (id) localStorage.setItem(ACTIVE_VERSION_KEY, id);
+      else localStorage.removeItem(ACTIVE_VERSION_KEY);
+      const master = await loadState();
+      let state = master ?? undefined;
+      if (id && master) {
+        const v = await buildVersionEditorState(id, master);
+        if (v) state = v;
+      }
+      if (state) applyState(state);
+      setActiveCompany(
+        id ? versions.find((x) => x.id === id)?.company_name ?? null : null,
+      );
+    },
+    [flushSave, applyState, versions],
+  );
+
+  const handleSaveNewVersion = useCallback(
+    async (name: string, company: string | null) => {
+      await flushSave();
+      const v = await saveVersion(name, company, currentResumeState());
+      if (v) {
+        await refreshVersions();
+        await switchTo(v.id);
+      }
+    },
+    [flushSave, currentResumeState, refreshVersions, switchTo],
+  );
+
+  const handleRenameVersion = useCallback(
+    async (id: string, name: string, company: string | null) => {
+      await renameVersion(id, { name, company_name: company });
+      await refreshVersions();
+      if (id === activeVersionIdRef.current) setActiveCompany(company);
+    },
+    [refreshVersions],
+  );
+
+  const handleDuplicateVersion = useCallback(
+    async (id: string) => {
+      const src = versions.find((v) => v.id === id);
+      await duplicateVersion(id, `${src?.name ?? "Version"} (copy)`);
+      await refreshVersions();
+    },
+    [versions, refreshVersions],
+  );
+
+  const handleDeleteVersion = useCallback(
+    async (id: string) => {
+      await deleteVersion(id);
+      if (id === activeVersionIdRef.current) await switchTo(null);
+      await refreshVersions();
+    },
+    [switchTo, refreshVersions],
+  );
+
+  // Guided mode: current selection from live editor state (respects mid-flow tweaks).
+  const getCurrentSelection = useCallback(() => {
+    const st = currentResumeState();
+    const excluded = new Set(st.excluded_bullets);
+    const selectedSet = new Set(st.selected_projects);
+    const includedBulletIds = [
+      ...st.projects
+        .filter((p) => selectedSet.has(p.id))
+        .flatMap((p) => p.bullets.filter((b) => !excluded.has(b.id)).map((b) => b.id)),
+      ...st.work.flatMap((w) =>
+        w.bullets.filter((b) => !excluded.has(b.id)).map((b) => b.id),
+      ),
+    ];
+    return {
+      selectedProjectIds: st.selected_projects,
+      projectOrder: st.selected_projects,
+      includedBulletIds,
+      skills: Object.keys(st.skills).map((c, i) => ({
+        category: c,
+        items: st.skills[c].split(",").map((s) => s.trim()).filter(Boolean),
+        position: i,
+        is_selected: st.selected_skills.includes(c),
+      })),
+      rationale: [] as string[],
+    };
+  }, [currentResumeState]);
+
+  // Guided mode: resume as ATS/reviewers see it (selected only, HTML stripped).
+  const getCurrentResumeView = useCallback(() => {
+    const st = currentResumeState();
+    const excluded = new Set(st.excluded_bullets);
+    const selectedSet = new Set(st.selected_projects);
+    const strip = (t: string) => t.replace(/<[^>]+>/g, "").trim();
+    return {
+      projects: st.projects
+        .filter((p) => selectedSet.has(p.id))
+        .map((p) => ({
+          title: strip(p.title),
+          bullets: p.bullets
+            .filter((b) => !excluded.has(b.id))
+            .map((b) => strip(b.text))
+            .filter(Boolean),
+        })),
+      work: st.work.map((w) => ({
+        title: strip(w.title),
+        bullets: w.bullets
+          .filter((b) => !excluded.has(b.id))
+          .map((b) => strip(b.text))
+          .filter(Boolean),
+      })),
+      skills: Object.keys(st.skills)
+        .filter((c) => st.selected_skills.includes(c))
+        .map((c) => ({ category: c, items: st.skills[c] })),
+      // Education renders on the resume but isn't in editor state — add it explicitly.
+      education: education.map((e) => ({
+        school: e.school,
+        degree: e.details ? `${e.degree}, ${e.details}` : e.degree,
+        date: e.date,
+      })),
+    };
+  }, [currentResumeState, education]);
+
+  const applyTailoredBullets = useCallback(
+    (bullets: { id: string; text: string }[]) => {
+      const map = new Map(bullets.map((b) => [b.id, b.text]));
+      const patch = (bs: { id: string; text: string }[]) =>
+        bs.map((b) => (map.has(b.id) ? { ...b, text: map.get(b.id)! } : b));
+      setProjects((prev) =>
+        prev.map((p) => ({ ...p, bullets: patch(p.bullets) as typeof p.bullets })),
+      );
+      setWork((prev) =>
+        prev.map((w) => ({ ...w, bullets: patch(w.bullets) as typeof w.bullets })),
+      );
+    },
+    [],
+  );
+
+  // Turn a tailoring plan into a new version and switch to it (Master untouched).
+  const applyTailoringPlan = useCallback(
+    async (plan: unknown) => {
+      const p = plan as TailoringPlanOverlay & {
+        companyName?: string;
+        fitAssessment?: { roleType?: string };
+      };
+      const master = await loadState();
+      if (!master) return;
+      const tailored = applyPlanToMaster(master, p);
+      const company = p.companyName?.trim() || "";
+      const role = p.fitAssessment?.roleType?.trim() || "";
+      // Version name = role type; company lives in its own field.
+      const name = role || company || "Tailored";
+      const v = await saveVersion(name, company || null, tailored);
+      if (v) {
+        await refreshVersions();
+        await switchTo(v.id);
+      }
+    },
+    [refreshVersions, switchTo],
+  );
 
   const sortedProjects = sortByDateDesc(projects);
   const resumeHTML = generateResumeHTML(
@@ -93,6 +423,8 @@ export default function Editor() {
     skills,
     work,
     excludedBullets,
+    personal,
+    education,
   );
 
   const checkOverflow = useCallback(() => {
@@ -100,15 +432,34 @@ export default function Editor() {
     if (!iframe) return false;
     try {
       const doc = iframe.contentDocument || iframe.contentWindow?.document;
-      const page = doc?.querySelector(".page");
+      const page = doc?.querySelector<HTMLElement>(".page");
       if (!page) return false;
-      const isOver = page.scrollHeight > page.clientHeight + 2;
+      // scrollHeight counts the bottom padding (page margin); only flag when
+      // content spills PAST the page box, so allow up to that padding.
+      const cs = doc?.defaultView?.getComputedStyle(page);
+      const padBottom = cs ? parseFloat(cs.paddingBottom) || 0 : 0;
+      const isOver = page.scrollHeight - page.clientHeight > padBottom + 2;
       setOverflowWarning(isOver);
       return isOver;
     } catch {
       return false;
     }
   }, []);
+
+  // Measure only after the web font loads, else the badge sticks on fallback
+  // metrics. Extra timeout covers browsers where fonts.ready beats layout.
+  const handlePreviewLoad = useCallback(() => {
+    const doc =
+      iframeRef.current?.contentDocument ||
+      iframeRef.current?.contentWindow?.document;
+    const fonts = doc?.fonts as FontFaceSet | undefined;
+    if (fonts?.ready) {
+      fonts.ready.then(() => checkOverflow()).catch(() => checkOverflow());
+    } else {
+      checkOverflow();
+    }
+    setTimeout(checkOverflow, 250);
+  }, [checkOverflow]);
 
   function exportPDF() {
     if (checkOverflow()) {
@@ -119,15 +470,10 @@ export default function Editor() {
       )
         return;
     }
-
     const originalTitle = document.title;
-    document.title = "AdwaitRelekar_Resume";
-
+    document.title = `${namePrefix(personal.full_name)}_Resume_${sanitizeCompany(activeCompany)}`;
     iframeRef.current?.contentWindow?.focus();
     iframeRef.current?.contentWindow?.print();
-
-    // Restore after the print dialog is dismissed.
-    // afterprint fires whether the user saved or cancelled.
     const restore = () => {
       document.title = originalTitle;
       window.removeEventListener("afterprint", restore);
@@ -150,12 +496,10 @@ export default function Editor() {
     setProjects((prev) => prev.map((p) => (p.id === id ? updated : p)));
     setTimeout(checkOverflow, 300);
   }
-
   function deleteProject(id: string) {
     setProjects((prev) => prev.filter((p) => p.id !== id));
     setSelectedProjects((prev) => prev.filter((i) => i !== id));
   }
-
   function addProject() {
     const id = crypto.randomUUID();
     setProjects((prev) => [
@@ -164,17 +508,10 @@ export default function Editor() {
         id,
         title: "New Project (Tech Stack)",
         date: "Jan 2026",
-        bullets: [
-          {
-            id: crypto.randomUUID(),
-            text: "",
-            original_text: "",
-          },
-        ],
+        bullets: [{ id: crypto.randomUUID(), text: "", original_text: "" }],
       },
     ]);
   }
-
   function addWork() {
     const id = crypto.randomUUID();
     setWork((prev) => [
@@ -183,26 +520,17 @@ export default function Editor() {
         id,
         title: "Job Title, Company, Location",
         date: "Jan 2024 – Present",
-        bullets: [
-          {
-            id: crypto.randomUUID(),
-            text: "",
-            original_text: "",
-          },
-        ],
+        bullets: [{ id: crypto.randomUUID(), text: "", original_text: "" }],
       },
     ]);
   }
-
   function updateWork(id: string, updated: WorkEntry) {
     setWork((prev) => prev.map((j) => (j.id === id ? updated : j)));
     setTimeout(checkOverflow, 300);
   }
-
   function deleteWork(id: string) {
     setWork((prev) => prev.filter((j) => j.id !== id));
   }
-
   function reorderProjects(oldIndex: number, newIndex: number) {
     setProjects((prev) => {
       const next = [...prev];
@@ -211,7 +539,6 @@ export default function Editor() {
       return next;
     });
   }
-
   function reorderWork(oldIndex: number, newIndex: number) {
     setWork((prev) => {
       const next = [...prev];
@@ -220,7 +547,6 @@ export default function Editor() {
       return next;
     });
   }
-
   function reorderSkills(oldIndex: number, newIndex: number) {
     setSkills((prev) => {
       const entries = Object.entries(prev);
@@ -230,241 +556,257 @@ export default function Editor() {
     });
   }
 
-  const tabStyle = (t: Tab) => ({
-    padding: "8px 12px",
-    cursor: "pointer" as const,
-    fontWeight: tab === t ? 700 : 400,
-    color: tab === t ? "#2563eb" : "#555",
-    background: "none",
-    border: "none",
-    borderBottom: tab === t ? "2px solid #2563eb" : "2px solid transparent",
-    fontSize: 13,
-  });
-
-  const TAB_LABELS: Record<Tab, string> = {
-    jd: "JD Analysis",
-    projects: "Projects",
-    experience: "Experience",
-    skills: "Skills",
-  };
-
   if (!loaded) {
     return (
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "100vh",
-          fontFamily: "system-ui, sans-serif",
-          color: "#64748b",
-          fontSize: 15,
-        }}
-      >
-        Loading...
+      <div className="flex h-screen items-center justify-center text-sm text-muted-foreground">
+        Loading…
       </div>
     );
   }
 
+  const SECTIONS: { key: Section; label: string; icon: React.ReactNode }[] = [
+    { key: "skills", label: "Skills", icon: <Wrench /> },
+    { key: "experience", label: "Experience", icon: <Briefcase /> },
+    { key: "projects", label: "Projects", icon: <FolderGit2 /> },
+  ];
+
+  // Show onboarding only on the empty Master (not a loaded version), once
+  // loaded, and until the user acts or dismisses it.
+  const showOnboarding =
+    loaded &&
+    !onboardDismissed &&
+    !activeVersionId &&
+    work.length === 0 &&
+    projects.length === 0 &&
+    Object.keys(skills).length === 0;
+
   return (
-    <div
-      style={{
-        fontFamily: "system-ui, sans-serif",
-        minHeight: "100vh",
-        background: "#f8fafc",
-      }}
-    >
-      {/* Header */}
-      <div
-        style={{
-          background: "#1e293b",
-          color: "#fff",
-          padding: "14px 24px",
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
+    <div className="flex h-screen flex-col bg-background text-foreground">
+      {/* Top bar */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
+        <div className="flex items-center gap-2 text-sm font-semibold">
+          <Sparkles className="size-4 text-primary" />
+          Resume Builder
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="hidden text-xs text-muted-foreground sm:inline">
+            {user?.email}
+          </span>
+          <ApiSettings />
+          <Button variant="ghost" size="sm" asChild>
+            <Link to="/profile">
+              <UserRound />
+              Profile
+            </Link>
+          </Button>
+          <Button variant="ghost" size="sm" onClick={signOut}>
+            <LogOut />
+            Sign out
+          </Button>
+        </div>
+      </header>
+
+      <div className="flex min-h-0 flex-1">
+        {/* Left sidebar */}
+        <aside className="flex w-64 shrink-0 flex-col gap-4 border-r border-border p-3">
+          <VersionBar
+            versions={versions}
+            activeVersionId={activeVersionId}
+            onSwitch={switchTo}
+            onSaveNew={handleSaveNewVersion}
+            onRename={handleRenameVersion}
+            onDuplicate={handleDuplicateVersion}
+            onDelete={handleDeleteVersion}
+          />
+          <Separator />
+          <div className="flex flex-col gap-1.5">
+            <span className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Actions
+            </span>
+            <Button
+              variant="outline"
+              size="lg"
+              className="w-full justify-start"
+              onClick={exportPDF}
+            >
+              <Download />
+              Export PDF
+            </Button>
+          </div>
+          <div className="mt-auto px-1 text-[11px] text-muted-foreground">
+            {`PDF: ${namePrefix(personal.full_name)}_Resume_${sanitizeCompany(activeCompany)}.pdf`}
+          </div>
+        </aside>
+
+        {/* Center: editor and live preview side by side */}
+        <main className="flex min-w-0 flex-1">
+          {/* Edit pane */}
+          <section className="flex w-[44%] min-w-[340px] flex-col border-r border-border bg-background">
+            <div className="flex h-12 shrink-0 items-center border-b border-border px-4">
+              <Tabs value={section} onValueChange={(v) => setSection(v as Section)}>
+                <TabsList>
+                  {SECTIONS.map((s) => (
+                    <TabsTrigger key={s.key} value={s.key}>
+                      {s.icon}
+                      {s.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              {section === "projects" && (
+                <ProjectsTab
+                  projects={sortedProjects}
+                  selectedProjects={selectedProjects}
+                  toggleProject={toggleProject}
+                  updateProject={updateProject}
+                  deleteProject={deleteProject}
+                  addProject={addProject}
+                  excludedBullets={excludedBullets}
+                  toggleBulletExcluded={toggleBulletExcluded}
+                  reorderProjects={reorderProjects}
+                />
+              )}
+              {section === "experience" && (
+                <ExperienceTab
+                  work={work}
+                  updateWork={updateWork}
+                  deleteWork={deleteWork}
+                  addWork={addWork}
+                  excludedBullets={excludedBullets}
+                  toggleBulletExcluded={toggleBulletExcluded}
+                  reorderWork={reorderWork}
+                />
+              )}
+              {section === "skills" && (
+                <SkillsTab
+                  skills={skills}
+                  setSkills={setSkills}
+                  reorderSkills={reorderSkills}
+                  selectedSkills={selectedSkills}
+                  toggleSkill={toggleSkill}
+                />
+              )}
+            </div>
+          </section>
+
+          {/* Preview pane */}
+          <section className="flex min-w-0 flex-1 flex-col bg-muted/30">
+            <div className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
+              <span className="text-sm font-medium text-muted-foreground">
+                Live preview
+              </span>
+              {overflowWarning ? (
+                <Badge variant="warning">
+                  <AlertTriangle className="size-3" />
+                  Overflows one page
+                </Badge>
+              ) : (
+                <Badge variant="success">
+                  <CheckCircle2 className="size-3" />
+                  Fits one page
+                </Badge>
+              )}
+            </div>
+            <div ref={previewPaneRef} className="flex min-h-0 flex-1 justify-center overflow-auto p-4">
+              <div
+                style={{
+                  width: `${8.5 * previewScale}in`,
+                  height: `${11 * previewScale}in`,
+                  flexShrink: 0,
+                }}
+              >
+                <iframe
+                  ref={iframeRef}
+                  srcDoc={resumeHTML}
+                  onLoad={handlePreviewLoad}
+                  title="Resume Preview"
+                  style={{
+                    width: "8.5in",
+                    height: "11in",
+                    transform: `scale(${previewScale})`,
+                    transformOrigin: "top left",
+                  }}
+                  className="rounded-sm border-none bg-white shadow-[0_4px_24px_rgba(0,0,0,0.12)]"
+                />
+              </div>
+            </div>
+          </section>
+        </main>
+
+        {/* Right sidebar: JD + agent reasoning */}
+        <aside className="flex w-[380px] shrink-0 flex-col border-l border-border">
+          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
+            <span className="flex items-center gap-2 text-sm font-semibold">
+              <Sparkles className="size-4 text-primary" />
+              Tailor from JD
+            </span>
+            <Tabs
+              value={tailorMode}
+              onValueChange={(v) => setTailorMode(v as "quick" | "guided")}
+            >
+              <TabsList className="h-7">
+                <TabsTrigger value="quick" className="text-xs">
+                  Quick
+                </TabsTrigger>
+                <TabsTrigger value="guided" className="text-xs">
+                  Guided
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+          <div className="min-h-0 flex-1">
+            {tailorMode === "quick" ? (
+              <JDAnalysisTab
+                profileId={user?.id ?? ""}
+                onApplyPlan={applyTailoringPlan}
+              />
+            ) : (
+              <GuidedTailor
+                profileId={user?.id ?? ""}
+                onApplyScreenPlan={applyTailoringPlan}
+                getCurrentSelection={getCurrentSelection}
+                onApplyTailoredBullets={applyTailoredBullets}
+                getResumeView={getCurrentResumeView}
+              />
+            )}
+          </div>
+        </aside>
+      </div>
+
+      {/* First-time onboarding: import a resume to auto-populate the master. */}
+      <Dialog
+        open={showOnboarding}
+        onOpenChange={(o) => {
+          if (!o) setOnboardDismissed(true);
         }}
       >
-        <div style={{ fontWeight: 700, fontSize: 16 }}>
-          Resume Builder — Adwait Relekar
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 13, color: "#cbd5e1" }}>{user?.email}</span>
-          <button
-            onClick={exportPDF}
-            style={{
-              background: "#2563eb",
-              color: "#fff",
-              border: "none",
-              borderRadius: 6,
-              padding: "8px 18px",
-              fontWeight: 700,
-              cursor: "pointer",
-              fontSize: 14,
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Welcome — let's build your master resume</DialogTitle>
+            <DialogDescription>
+              Upload your existing resume as a PDF and we'll fill in your
+              profile, experience, projects, and skills automatically. You can
+              edit everything afterward.
+            </DialogDescription>
+          </DialogHeader>
+          <ResumeUpload
+            onDone={async () => {
+              setOnboardDismissed(true);
+              await Promise.all([refresh(), refreshVersions(), loadProfile()]);
             }}
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            className="w-full"
+            onClick={() => setOnboardDismissed(true)}
           >
-            Export PDF
-          </button>
-          <button
-            onClick={signOut}
-            style={{
-              background: "transparent",
-              color: "#cbd5e1",
-              border: "1px solid #475569",
-              borderRadius: 6,
-              padding: "8px 14px",
-              fontWeight: 600,
-              cursor: "pointer",
-              fontSize: 13,
-            }}
-          >
-            Sign out
-          </button>
-        </div>
-      </div>
-
-      {/* Body */}
-      <div style={{ display: "flex", height: "calc(100vh - 52px)" }}>
-        {/* Sidebar */}
-        <div
-          style={{
-            width: 440,
-            minWidth: 400,
-            background: "#fff",
-            borderRight: "1px solid #e2e8f0",
-            display: "flex",
-            flexDirection: "column",
-            overflowY: "auto",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              borderBottom: "1px solid #e2e8f0",
-              padding: "0 8px",
-            }}
-          >
-            {(Object.keys(TAB_LABELS) as Tab[]).map((t) => (
-              <button key={t} style={tabStyle(t)} onClick={() => setTab(t)}>
-                {TAB_LABELS[t]}
-              </button>
-            ))}
-          </div>
-
-          <div style={{ padding: 14, flex: 1 }}>
-            {tab === "jd" && (
-              <JDAnalysisTab
-                projects={sortedProjects}
-                skills={skills}
-                setSelectedProjects={(ids) => {
-                  setSelectedProjects(ids);
-                  setTimeout(checkOverflow, 300);
-                }}
-              />
-            )}
-            {tab === "projects" && (
-              <ProjectsTab
-                projects={sortedProjects}
-                selectedProjects={selectedProjects}
-                toggleProject={toggleProject}
-                updateProject={updateProject}
-                deleteProject={deleteProject}
-                addProject={addProject}
-                excludedBullets={excludedBullets}
-                toggleBulletExcluded={toggleBulletExcluded}
-                reorderProjects={reorderProjects}
-              />
-            )}
-            {tab === "experience" && (
-              <ExperienceTab
-                work={work}
-                updateWork={updateWork}
-                deleteWork={deleteWork}
-                addWork={addWork}
-                excludedBullets={excludedBullets}
-                toggleBulletExcluded={toggleBulletExcluded}
-                reorderWork={reorderWork}
-              />
-            )}
-            {tab === "skills" && (
-              <SkillsTab
-                skills={skills}
-                setSkills={setSkills}
-                reorderSkills={reorderSkills}
-                selectedSkills={selectedSkills}
-                toggleSkill={toggleSkill}
-              />
-            )}
-          </div>
-        </div>
-
-        {/* Preview */}
-        <div
-          style={{
-            flex: 1,
-            background: "#e2e8f0",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            padding: "20px 0",
-            overflowY: "auto",
-          }}
-        >
-          <div style={{ fontSize: 12, color: "#64748b", marginBottom: 6 }}>
-            Live Preview
-          </div>
-          {overflowWarning && (
-            <div
-              style={{
-                background: "#fef2f2",
-                border: "1px solid #fca5a5",
-                borderRadius: 6,
-                padding: "8px 14px",
-                marginBottom: 10,
-                fontSize: 13,
-                color: "#dc2626",
-                fontWeight: 600,
-                maxWidth: "90%",
-              }}
-            >
-              ⚠️ Content overflows the page. Remove a project or bullet to fit
-              within one page.
-            </div>
-          )}
-          <div
-            style={{
-              width: "100%",
-              display: "flex",
-              justifyContent: "center",
-              overflowX: "auto",
-            }}
-          >
-            <div
-              style={{
-                transform: "scale(0.75)",
-                transformOrigin: "top center",
-                width: "8.5in",
-                minHeight: "11in",
-                marginBottom: "-25%",
-              }}
-            >
-              <iframe
-                ref={iframeRef}
-                srcDoc={resumeHTML}
-                onLoad={checkOverflow}
-                style={{
-                  width: "8.5in",
-                  minHeight: "11in",
-                  border: "none",
-                  background: "#fff",
-                  boxShadow: "0 4px 24px rgba(0,0,0,0.12)",
-                }}
-                title="Resume Preview"
-              />
-            </div>
-          </div>
-        </div>
-      </div>
+            I'll start from scratch
+          </Button>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -14,6 +14,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import InlineText from "./InlineText";
+import { ec } from "../lib/editorTheme";
 import type { ProjectEntry, WorkEntry, Bullet } from "../data/resumeData";
 
 type Entry = ProjectEntry | WorkEntry;
@@ -33,8 +34,6 @@ export default function EntryEditor({
   excludedBullets,
   toggleBulletExcluded,
 }: EntryEditorProps) {
-  // Require ~5px movement before drag starts so clicks in the bullet text
-  // don't accidentally start a drag.
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
@@ -82,16 +81,16 @@ export default function EntryEditor({
   return (
     <div
       style={{
-        border: "1px solid #e2e8f0",
+        border: `1px solid ${ec.border}`,
         borderRadius: 6,
         padding: 10,
         marginBottom: 8,
-        background: "#fff",
+        background: ec.card,
       }}
     >
       <div style={{ display: "flex", gap: 6, marginBottom: 4 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 11, color: "#888", marginBottom: 2 }}>
+          <div style={{ fontSize: 11, color: ec.faint, marginBottom: 2 }}>
             Title
           </div>
           <InlineText
@@ -101,7 +100,7 @@ export default function EntryEditor({
           />
         </div>
         <div style={{ width: 100 }}>
-          <div style={{ fontSize: 11, color: "#888", marginBottom: 2 }}>
+          <div style={{ fontSize: 11, color: ec.faint, marginBottom: 2 }}>
             Date
           </div>
           <InlineText
@@ -110,9 +109,7 @@ export default function EntryEditor({
           />
         </div>
       </div>
-      <div
-        style={{ fontSize: 11, color: "#888", marginBottom: 4, marginTop: 6 }}
-      >
+      <div style={{ fontSize: 11, color: ec.faint, marginBottom: 4, marginTop: 6 }}>
         Bullets
       </div>
 
@@ -145,12 +142,13 @@ export default function EntryEditor({
           onClick={addBullet}
           style={{
             flex: 1,
-            background: "#f1f5f9",
-            border: "1px solid #e2e8f0",
+            background: ec.muted,
+            border: `1px solid ${ec.border}`,
             borderRadius: 4,
             padding: "5px 0",
             fontSize: 12,
             cursor: "pointer",
+            color: ec.fg,
           }}
         >
           + Add Bullet
@@ -158,13 +156,13 @@ export default function EntryEditor({
         <button
           onClick={onDelete}
           style={{
-            background: "#fef2f2",
-            border: "1px solid #fecaca",
+            background: ec.destructiveTint,
+            border: `1px solid ${ec.destructiveBorder}`,
             borderRadius: 4,
             padding: "5px 10px",
             fontSize: 12,
             cursor: "pointer",
-            color: "#dc2626",
+            color: ec.destructive,
           }}
         >
           Delete
@@ -208,7 +206,7 @@ function SortableBullet({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : isExcluded ? 0.4 : 1,
-    background: isDragging ? "#f8fafc" : "transparent",
+    background: isDragging ? ec.muted : "transparent",
     display: "flex",
     alignItems: "flex-start",
     gap: 4,
@@ -223,7 +221,7 @@ function SortableBullet({
         title="Drag to reorder"
         style={{
           cursor: "grab",
-          color: "#cbd5e1",
+          color: ec.faint,
           paddingTop: 4,
           fontSize: 12,
           userSelect: "none",
@@ -241,7 +239,7 @@ function SortableBullet({
         }
         style={{ marginTop: 5, cursor: "pointer", flexShrink: 0 }}
       />
-      <span style={{ color: "#94a3b8", marginTop: 4, fontSize: 14 }}>•</span>
+      <span style={{ color: ec.faint, marginTop: 4, fontSize: 14 }}>•</span>
       <div style={{ flex: 1 }}>
         <InlineText
           value={bullet.text}
@@ -256,7 +254,7 @@ function SortableBullet({
           style={{
             background: "none",
             border: "none",
-            color: "#6366f1",
+            color: ec.primary,
             cursor: "pointer",
             padding: 4,
             display: "flex",
@@ -285,7 +283,7 @@ function SortableBullet({
         style={{
           background: "none",
           border: "none",
-          color: "#f87171",
+          color: ec.destructive,
           cursor: "pointer",
           fontSize: 16,
           lineHeight: 1,

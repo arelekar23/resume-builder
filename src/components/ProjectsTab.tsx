@@ -14,6 +14,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import EntryEditor from "./EntryEditor";
+import { ec } from "../lib/editorTheme";
 import type { ProjectEntry } from "../data/resumeData";
 
 interface ProjectsTabProps {
@@ -48,7 +49,8 @@ export default function ProjectsTab({
   function toggleExpand(id: string) {
     setExpandedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   }
@@ -64,9 +66,9 @@ export default function ProjectsTab({
 
   return (
     <div>
-      <div style={{ fontSize: 13, color: "#555", marginBottom: 10 }}>
-        Drag <span style={{ color: "#94a3b8" }}>⋮⋮</span> to reorder. Click any
-        text to edit. Check to include on resume.
+      <div style={{ fontSize: 13, color: ec.mutedFg, marginBottom: 10 }}>
+        Drag <span style={{ color: ec.faint }}>⋮⋮</span> to reorder. Click a card
+        to expand and edit. Check to include on resume.
       </div>
       <DndContext
         sensors={sensors}
@@ -97,14 +99,14 @@ export default function ProjectsTab({
         onClick={addProject}
         style={{
           width: "100%",
-          background: "#f1f5f9",
-          border: "1px dashed #94a3b8",
+          background: ec.muted,
+          border: `1px dashed ${ec.border}`,
           borderRadius: 6,
           padding: "10px 0",
           fontSize: 13,
           cursor: "pointer",
           fontWeight: 600,
-          color: "#475569",
+          color: ec.mutedFg,
         }}
       >
         + Add Project
@@ -149,11 +151,11 @@ function SortableProjectCard({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
-    border: `1.5px solid ${isSelected ? "#2563eb" : "#e2e8f0"}`,
+    border: `1.5px solid ${isSelected ? ec.primary : ec.border}`,
     borderRadius: 8,
     marginBottom: 10,
     overflow: "hidden",
-    background: "#fff",
+    background: ec.card,
   } as const;
 
   return (
@@ -165,8 +167,8 @@ function SortableProjectCard({
           alignItems: "center",
           gap: 8,
           padding: "8px 10px",
-          background: isSelected ? "#eff6ff" : "#f8fafc",
-          borderBottom: isExpanded ? "1px solid #e2e8f0" : "none",
+          background: isSelected ? ec.primaryTint : ec.muted,
+          borderBottom: isExpanded ? `1px solid ${ec.border}` : "none",
         }}
       >
         <span
@@ -175,7 +177,7 @@ function SortableProjectCard({
           title="Drag to reorder"
           style={{
             cursor: "grab",
-            color: "#94a3b8",
+            color: ec.faint,
             fontSize: 14,
             userSelect: "none",
             flexShrink: 0,
@@ -193,7 +195,7 @@ function SortableProjectCard({
           style={{
             fontSize: 12,
             fontWeight: 600,
-            color: isSelected ? "#2563eb" : "#64748b",
+            color: isSelected ? ec.primary : ec.mutedFg,
           }}
         >
           {isSelected ? "Included" : "Excluded"}
@@ -209,8 +211,8 @@ function SortableProjectCard({
           alignItems: "center",
           padding: "8px 10px",
           cursor: "pointer",
-          background: "#fff",
-          borderBottom: isExpanded ? "1px solid #e2e8f0" : "none",
+          background: ec.card,
+          borderBottom: isExpanded ? `1px solid ${ec.border}` : "none",
           userSelect: "none",
         }}
       >
@@ -222,16 +224,16 @@ function SortableProjectCard({
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
-              color: "#1e293b",
+              color: ec.fg,
             }}
           >
             {p.title}
           </div>
-          <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>
+          <div style={{ fontSize: 11, color: ec.faint, marginTop: 2 }}>
             {p.date}
           </div>
         </div>
-        <span style={{ fontSize: 14, color: "#94a3b8", marginLeft: 8 }}>
+        <span style={{ fontSize: 14, color: ec.faint, marginLeft: 8 }}>
           {isExpanded ? "▲" : "▼"}
         </span>
       </div>

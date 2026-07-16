@@ -1,0 +1,4 @@
+# Place the tailoring guidance file here:
+#   tailoring-principles.md
+# It is loaded at cold start by ../guidance-files.ts and bundled into the
+# serverless function via vercel.json `includeFiles`.

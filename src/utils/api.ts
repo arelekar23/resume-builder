@@ -19,7 +19,6 @@ const EMPTY_STATE: ResumeState = {
     excluded_bullets: []
 };
 
-// Snapshot of the last state we loaded or successfully saved.
 // saveState diffs against this so we only write what actually changed.
 let lastSaved: ResumeState | null = null;
 let cachedProfileId: string | null = null;
@@ -38,13 +37,8 @@ async function getProfileId(): Promise<string | null> {
     return cachedProfileId;
 }
 
-/**
- * Load the current user's resume from the normalized tables and assemble it
- * into the in-memory shape the editor + renderer expect.
- *
- * Returns an empty-but-valid state for new users so the editor can render
- * a blank resume.
- */
+// Assemble the master resume from the normalized tables. Returns empty state
+// for new users.
 export async function loadState(): Promise<ResumeState | null> {
     try {
         const profileId = await getProfileId();
@@ -148,17 +142,13 @@ export async function loadState(): Promise<ResumeState | null> {
     }
 }
 
-/**
- * Diff-based save. Only writes rows that changed since the last successful
- * save (or load). Replaces a work/project's bullets entirely if any of them
- * changed, since bullets don't have stable IDs in the in-memory shape.
- */
+// Diff-based save: only writes rows changed since the last load/save.
 export async function saveState(state: ResumeState): Promise<void> {
     try {
         const profileId = await getProfileId();
         if (!profileId) return;
 
-        // No baseline yet (e.g., load failed). Skip — safer than overwriting.
+        // No baseline (e.g. load failed) — skip rather than overwrite.
         if (!lastSaved) {
             console.warn("saveState skipped: no baseline state loaded");
             return;
@@ -168,7 +158,6 @@ export async function saveState(state: ResumeState): Promise<void> {
         const selectedSet = new Set(state.selected_projects);
         const prevSelectedSet = new Set(baseline.selected_projects);
 
-        // ---- PROJECTS ----
         const prevProjectsById = new Map(baseline.projects.map((p) => [p.id, p]));
         const currentProjectsById = new Map(state.projects.map((p) => [p.id, p]));
 
@@ -178,7 +167,6 @@ export async function saveState(state: ResumeState): Promise<void> {
             const wasSelectedBefore = prevSelectedSet.has(p.id);
 
             if (!prev) {
-                // New project row + all its bullets.
                 ops.push(
                     supabase.from("projects").insert({
                         id: p.id,
@@ -202,7 +190,6 @@ export async function saveState(state: ResumeState): Promise<void> {
                     );
                 }
             } else {
-                // Update only fields that changed.
                 const patch: Record<string, unknown> = {};
                 if (prev.title !== p.title) patch.title = p.title;
                 if (prev.date !== p.date) patch.date = p.date;
@@ -220,7 +207,6 @@ export async function saveState(state: ResumeState): Promise<void> {
                             const prevById = new Map(prev.bullets.map((b) => [b.id, b]));
                             const currById = new Map(p.bullets.map((b) => [b.id, b]));
 
-                            // Insert new bullets (in current but not in prev).
                             const inserts = p.bullets
                                 .map((b, idx) => ({ b, idx }))
                                 .filter(({ b }) => !prevById.has(b.id));
@@ -236,11 +222,10 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 );
                             }
 
-                            // Update existing bullets where text or position changed.
                             for (let idx = 0; idx < p.bullets.length; idx++) {
                                 const b = p.bullets[idx];
                                 const prevBullet = prevById.get(b.id);
-                                if (!prevBullet) continue; // already handled by insert
+                                if (!prevBullet) continue;
                                 const prevIdx = prev.bullets.findIndex((q) => q.id === b.id);
                                 const isExcludedNow = state.excluded_bullets.includes(b.id);
                                 const wasExcluded = baseline.excluded_bullets.includes(b.id);
@@ -256,7 +241,6 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 }
                             }
 
-                            // Delete bullets in prev but not in current.
                             const deletedIds = prev.bullets
                                 .filter((b) => !currById.has(b.id))
                                 .map((b) => b.id);
@@ -284,14 +268,13 @@ export async function saveState(state: ResumeState): Promise<void> {
             }
         });
 
-        // Deletes. Cascade in DB handles project_bullets.
+        // DB cascade handles project_bullets.
         for (const prev of baseline.projects) {
             if (!currentProjectsById.has(prev.id)) {
                 ops.push(supabase.from("projects").delete().eq("id", prev.id));
             }
         }
 
-        // ---- WORK ----
         const prevWorkById = new Map(baseline.work.map((w) => [w.id, w]));
         const currentWorkById = new Map(state.work.map((w) => [w.id, w]));
 
@@ -336,7 +319,6 @@ export async function saveState(state: ResumeState): Promise<void> {
                             const prevById = new Map(prev.bullets.map((b) => [b.id, b]));
                             const currById = new Map(w.bullets.map((b) => [b.id, b]));
 
-                            // Insert new bullets (in current but not in prev).
                             const inserts = w.bullets
                                 .map((b, idx) => ({ b, idx }))
                                 .filter(({ b }) => !prevById.has(b.id));
@@ -352,11 +334,10 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 );
                             }
 
-                            // Update existing bullets where text or position changed.
                             for (let idx = 0; idx < w.bullets.length; idx++) {
                                 const b = w.bullets[idx];
                                 const prevBullet = prevById.get(b.id);
-                                if (!prevBullet) continue; // already handled by insert
+                                if (!prevBullet) continue;
                                 const prevIdx = prev.bullets.findIndex((q) => q.id === b.id);
                                 const isExcludedNow = state.excluded_bullets.includes(b.id);
                                 const wasExcluded = baseline.excluded_bullets.includes(b.id);
@@ -372,7 +353,6 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 }
                             }
 
-                            // Delete bullets in prev but not in current.
                             const deletedIds = prev.bullets
                                 .filter((b) => !currById.has(b.id))
                                 .map((b) => b.id);
@@ -406,8 +386,7 @@ export async function saveState(state: ResumeState): Promise<void> {
             }
         }
 
-        // ---- SKILLS ----
-        // Skills are identified by category (string), not UUID.
+        // Skills are keyed by category string, not UUID.
         const currentCategories = Object.keys(state.skills);
         const prevCategories = Object.keys(baseline.skills);
         const currentCategorySet = new Set(currentCategories);
@@ -459,15 +438,13 @@ export async function saveState(state: ResumeState): Promise<void> {
             }
         }
 
-        if (ops.length === 0) return; // Nothing changed.
+        if (ops.length === 0) return;
 
         await Promise.all(ops);
-
-        // Successful save → bump the baseline.
         lastSaved = structuredClone(state);
     } catch (e) {
         console.error("Failed to save resume:", e);
-        // Leave lastSaved alone so the next save retries the same diff.
+        // Keep lastSaved so the next save retries the same diff.
     }
 }
 
