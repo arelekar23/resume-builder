@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   DndContext,
   closestCenter,
@@ -13,6 +14,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import EntryEditor from "./EntryEditor";
+import { ec } from "../lib/editorTheme";
 import type { WorkEntry } from "../data/resumeData";
 
 interface ExperienceTabProps {
@@ -34,9 +36,20 @@ export default function ExperienceTab({
   toggleBulletExcluded,
   reorderWork,
 }: ExperienceTabProps) {
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
   );
+
+  function toggleExpand(id: string) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -49,9 +62,9 @@ export default function ExperienceTab({
 
   return (
     <div>
-      <div style={{ fontSize: 13, color: "#555", marginBottom: 10 }}>
-        Drag <span style={{ color: "#94a3b8" }}>⋮⋮</span> to reorder. Click any
-        text to edit. All experience is always included.
+      <div style={{ fontSize: 13, color: ec.mutedFg, marginBottom: 10 }}>
+        Drag <span style={{ color: ec.faint }}>⋮⋮</span> to reorder. Click a card
+        to expand and edit. All experience is always included.
       </div>
       <DndContext
         sensors={sensors}
@@ -66,6 +79,8 @@ export default function ExperienceTab({
             <SortableWorkCard
               key={j.id}
               work={j}
+              isExpanded={expandedIds.has(j.id)}
+              onToggleExpand={() => toggleExpand(j.id)}
               onUpdate={(updated) => updateWork(j.id, updated)}
               onDelete={() => deleteWork(j.id)}
               excludedBullets={excludedBullets}
@@ -78,14 +93,14 @@ export default function ExperienceTab({
         onClick={addWork}
         style={{
           width: "100%",
-          background: "#f1f5f9",
-          border: "1px dashed #94a3b8",
+          background: ec.muted,
+          border: `1px dashed ${ec.border}`,
           borderRadius: 6,
           padding: "10px 0",
           fontSize: 13,
           cursor: "pointer",
           fontWeight: 600,
-          color: "#475569",
+          color: ec.mutedFg,
         }}
       >
         + Add Experience
@@ -96,6 +111,8 @@ export default function ExperienceTab({
 
 interface SortableWorkCardProps {
   work: WorkEntry;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
   onUpdate: (updated: WorkEntry) => void;
   onDelete: () => void;
   excludedBullets: Set<string>;
@@ -104,6 +121,8 @@ interface SortableWorkCardProps {
 
 function SortableWorkCard({
   work: j,
+  isExpanded,
+  onToggleExpand,
   onUpdate,
   onDelete,
   excludedBullets,
@@ -122,38 +141,87 @@ function SortableWorkCard({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
-    display: "flex",
-    gap: 4,
-    alignItems: "flex-start",
-    marginBottom: 8,
+    border: `1.5px solid ${ec.border}`,
+    borderRadius: 8,
+    marginBottom: 10,
+    overflow: "hidden",
+    background: ec.card,
   } as const;
 
   return (
     <div ref={setNodeRef} style={style}>
-      <span
-        {...attributes}
-        {...listeners}
-        title="Drag to reorder"
+      {/* Collapsed header: drag handle + title + date + chevron */}
+      <div
         style={{
-          cursor: "grab",
-          color: "#94a3b8",
-          fontSize: 14,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 10px",
+          background: ec.card,
+          borderBottom: isExpanded ? `1px solid ${ec.border}` : "none",
           userSelect: "none",
-          flexShrink: 0,
-          paddingTop: 14,
         }}
       >
-        ⋮⋮
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <EntryEditor
-          entry={j}
-          onChange={(updated) => onUpdate(updated as WorkEntry)}
-          onDelete={onDelete}
-          excludedBullets={excludedBullets}
-          toggleBulletExcluded={toggleBulletExcluded}
-        />
+        <span
+          {...attributes}
+          {...listeners}
+          title="Drag to reorder"
+          style={{
+            cursor: "grab",
+            color: ec.faint,
+            fontSize: 14,
+            userSelect: "none",
+            flexShrink: 0,
+          }}
+        >
+          ⋮⋮
+        </span>
+        <div
+          onClick={onToggleExpand}
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flex: 1,
+            minWidth: 0,
+            cursor: "pointer",
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 700,
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                color: ec.fg,
+              }}
+            >
+              {j.title}
+            </div>
+            <div style={{ fontSize: 11, color: ec.faint, marginTop: 2 }}>
+              {j.date}
+            </div>
+          </div>
+          <span style={{ fontSize: 14, color: ec.faint, marginLeft: 8 }}>
+            {isExpanded ? "▲" : "▼"}
+          </span>
+        </div>
       </div>
+
+      {/* Expanded: full editor with bullets */}
+      {isExpanded && (
+        <div style={{ padding: 10 }}>
+          <EntryEditor
+            entry={j}
+            onChange={(updated) => onUpdate(updated as WorkEntry)}
+            onDelete={onDelete}
+            excludedBullets={excludedBullets}
+            toggleBulletExcluded={toggleBulletExcluded}
+          />
+        </div>
+      )}
     </div>
   );
 }

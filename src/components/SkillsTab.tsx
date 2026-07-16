@@ -13,6 +13,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { ec } from "../lib/editorTheme";
 import type { SkillsMap } from "../data/resumeData";
 
 interface SkillsTabProps {
@@ -22,6 +23,18 @@ interface SkillsTabProps {
   selectedSkills: string[];
   toggleSkill: (key: string) => void;
 }
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "6px 8px",
+  border: `1px solid ${ec.border}`,
+  borderRadius: 4,
+  fontSize: 13,
+  marginBottom: 6,
+  boxSizing: "border-box",
+  background: ec.bg,
+  color: ec.fg,
+};
 
 export default function SkillsTab({
   skills,
@@ -80,8 +93,8 @@ export default function SkillsTab({
 
   return (
     <div>
-      <div style={{ fontSize: 13, color: "#555", marginBottom: 10 }}>
-        Drag <span style={{ color: "#94a3b8" }}>⋮⋮</span> to reorder. Check to
+      <div style={{ fontSize: 13, color: ec.mutedFg, marginBottom: 10 }}>
+        Drag <span style={{ color: ec.faint }}>⋮⋮</span> to reorder. Check to
         include on resume.
       </div>
       <DndContext
@@ -89,10 +102,7 @@ export default function SkillsTab({
         collisionDetection={closestCenter}
         onDragEnd={handleDragEnd}
       >
-        <SortableContext
-          items={skillKeys}
-          strategy={verticalListSortingStrategy}
-        >
+        <SortableContext items={skillKeys} strategy={verticalListSortingStrategy}>
           {skillKeys.map((k) => (
             <SortableSkillCard
               key={k}
@@ -115,49 +125,40 @@ export default function SkillsTab({
       {/* Add new row */}
       <div
         style={{
-          border: "1px dashed #94a3b8",
+          border: `1px dashed ${ec.border}`,
           borderRadius: 6,
           padding: 10,
           marginTop: 8,
         }}
       >
-        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
+        <div
+          style={{
+            fontWeight: 700,
+            fontSize: 13,
+            marginBottom: 6,
+            color: ec.fg,
+          }}
+        >
           Add New Row
         </div>
         <input
           value={newSkillKey}
           onChange={(e) => setNewSkillKey(e.target.value)}
           placeholder="Category (e.g. Cloud Platforms)"
-          style={{
-            width: "100%",
-            padding: "6px 8px",
-            border: "1px solid #e2e8f0",
-            borderRadius: 4,
-            fontSize: 13,
-            marginBottom: 6,
-            boxSizing: "border-box",
-          }}
+          style={inputStyle}
         />
         <input
           value={newSkillVal}
           onChange={(e) => setNewSkillVal(e.target.value)}
           placeholder="Skills (e.g. AWS, Azure, GCP)"
-          style={{
-            width: "100%",
-            padding: "6px 8px",
-            border: "1px solid #e2e8f0",
-            borderRadius: 4,
-            fontSize: 13,
-            marginBottom: 6,
-            boxSizing: "border-box",
-          }}
+          style={inputStyle}
         />
         <button
           onClick={addSkill}
           style={{
             width: "100%",
-            background: "#2563eb",
-            color: "#fff",
+            background: ec.primary,
+            color: ec.primaryFg,
             border: "none",
             borderRadius: 4,
             padding: "7px 0",
@@ -213,11 +214,11 @@ function SortableSkillCard({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
-    border: `1.5px solid ${isSelected ? "#2563eb" : "#e2e8f0"}`,
+    border: `1.5px solid ${isSelected ? ec.primary : ec.border}`,
     borderRadius: 8,
     marginBottom: 8,
     overflow: "hidden",
-    background: "#fff",
+    background: ec.card,
   } as const;
 
   return (
@@ -229,8 +230,8 @@ function SortableSkillCard({
           alignItems: "center",
           gap: 8,
           padding: "8px 10px",
-          background: isSelected ? "#eff6ff" : "#f8fafc",
-          borderBottom: "1px solid #e2e8f0",
+          background: isSelected ? ec.primaryTint : ec.muted,
+          borderBottom: `1px solid ${ec.border}`,
         }}
       >
         <span
@@ -239,7 +240,7 @@ function SortableSkillCard({
           title="Drag to reorder"
           style={{
             cursor: "grab",
-            color: "#94a3b8",
+            color: ec.faint,
             fontSize: 14,
             userSelect: "none",
             flexShrink: 0,
@@ -257,7 +258,7 @@ function SortableSkillCard({
           style={{
             fontSize: 12,
             fontWeight: 600,
-            color: isSelected ? "#2563eb" : "#64748b",
+            color: isSelected ? ec.primary : ec.mutedFg,
           }}
         >
           {isSelected ? "Included" : "Excluded"}
@@ -266,7 +267,9 @@ function SortableSkillCard({
 
       {/* Body */}
       <div style={{ padding: 10 }}>
-        <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>
+        <div
+          style={{ fontWeight: 700, fontSize: 13, marginBottom: 4, color: ec.fg }}
+        >
           {skillKey}
         </div>
         {isEditing ? (
@@ -274,23 +277,15 @@ function SortableSkillCard({
             <input
               value={editingValue}
               onChange={(e) => onEditingValueChange(e.target.value)}
-              style={{
-                width: "100%",
-                padding: "6px 8px",
-                border: "1px solid #93c5fd",
-                borderRadius: 4,
-                fontSize: 13,
-                marginBottom: 6,
-                boxSizing: "border-box",
-              }}
+              style={{ ...inputStyle, border: `1px solid ${ec.ring}` }}
             />
             <div style={{ display: "flex", gap: 6 }}>
               <button
                 onClick={onSave}
                 style={{
                   flex: 1,
-                  background: "#2563eb",
-                  color: "#fff",
+                  background: ec.primary,
+                  color: ec.primaryFg,
                   border: "none",
                   borderRadius: 4,
                   padding: "6px 0",
@@ -305,8 +300,9 @@ function SortableSkillCard({
                 onClick={onCancelEdit}
                 style={{
                   flex: 1,
-                  background: "#e2e8f0",
-                  border: "none",
+                  background: ec.muted,
+                  color: ec.fg,
+                  border: `1px solid ${ec.border}`,
                   borderRadius: 4,
                   padding: "6px 0",
                   fontSize: 13,
@@ -319,7 +315,7 @@ function SortableSkillCard({
           </div>
         ) : (
           <div>
-            <div style={{ fontSize: 13, color: "#333", marginBottom: 6 }}>
+            <div style={{ fontSize: 13, color: ec.mutedFg, marginBottom: 6 }}>
               {skillValue}
             </div>
             <div style={{ display: "flex", gap: 6 }}>
@@ -327,12 +323,13 @@ function SortableSkillCard({
                 onClick={onStartEdit}
                 style={{
                   flex: 1,
-                  background: "#f1f5f9",
-                  border: "1px solid #e2e8f0",
+                  background: ec.muted,
+                  border: `1px solid ${ec.border}`,
                   borderRadius: 4,
                   padding: "5px 0",
                   fontSize: 12,
                   cursor: "pointer",
+                  color: ec.fg,
                 }}
               >
                 Edit
@@ -341,13 +338,13 @@ function SortableSkillCard({
                 onClick={onRemove}
                 style={{
                   flex: 1,
-                  background: "#fef2f2",
-                  border: "1px solid #fecaca",
+                  background: ec.destructiveTint,
+                  border: `1px solid ${ec.destructiveBorder}`,
                   borderRadius: 4,
                   padding: "5px 0",
                   fontSize: 12,
                   cursor: "pointer",
-                  color: "#dc2626",
+                  color: ec.destructive,
                 }}
               >
                 Remove

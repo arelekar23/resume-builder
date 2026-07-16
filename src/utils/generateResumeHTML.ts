@@ -1,4 +1,5 @@
 import type { ProjectEntry, WorkEntry, SkillsMap } from "../data/resumeData";
+import type { PersonalInfo, EducationRow } from "./profile";
 
 export default function generateResumeHTML(
   selectedProjects: string[],
@@ -7,8 +8,34 @@ export default function generateResumeHTML(
   skills: SkillsMap,
   workExp: WorkEntry[],
   excludedBullets: Set<string>,
+  personal: PersonalInfo,
+  education: EducationRow[],
 ): string {
   const selObjs = allProjects.filter((p) => selectedProjects.includes(p.id));
+
+  // Links get an href but display the bare URL.
+  const displayUrl = (u: string) =>
+    u.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  const contactHTML = [
+    personal.location,
+    personal.email ? `<a href="mailto:${personal.email}">${personal.email}</a>` : "",
+    personal.phone,
+    personal.linkedin_url
+      ? `<a href="${personal.linkedin_url}">${displayUrl(personal.linkedin_url)}</a>`
+      : "",
+    personal.github_url
+      ? `<a href="${personal.github_url}">${displayUrl(personal.github_url)}</a>`
+      : "",
+  ]
+    .filter((part) => part && part.trim())
+    .join(" | ");
+
+  const educationHTML = education
+    .map((e) => {
+      const details = e.details && e.details.trim() ? `<div>${e.details}</div>` : "";
+      return `<div class="edu-entry"><div class="edu-row"><span class="edu-school">${e.school}</span><span class="edu-date">${e.date}</span></div><div>${e.degree}</div>${details}</div>`;
+    })
+    .join("");
 
   const projectsHTML = selObjs
     .map((p) => {
@@ -33,7 +60,7 @@ export default function generateResumeHTML(
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>AdwaitRelekar_Resume</title>
+  <title>Resume</title>
   <style>
   @font-face {
     font-family: 'Calibri';
@@ -68,7 +95,7 @@ export default function generateResumeHTML(
     font-family: 'Calibri','Carlito',sans-serif; font-size: 11pt; line-height: 1.2; color: #000; background: #fff; text-align: justify;
 text-justify: inter-word;
 word-spacing: -0.01em;}
-    .page { width: 8.5in; height: 11in; max-height: 11in; overflow: hidden; margin: 0 auto; padding: 0.3in 0.3in 0.56in 0.3in; }
+    .page { width: 8.5in; height: 11in; max-height: 11in; overflow: hidden; margin: 0 auto; padding: 0.3in; }
     .header { text-align: center; margin-bottom: 8px; }
     .header h1 { font-size: 12pt; font-weight: 700; letter-spacing: 0.5px; }
     .header .contact { font-size: 11pt; margin-top: 1px; }
@@ -87,7 +114,7 @@ word-spacing: -0.01em;}
     .job-bullets li, .project-bullets li { margin-bottom: 1px; list-style-type: '•  '; padding-left: 2px; }
     @media print {
       body { background: #fff; }
-      .page { width: 100%; margin: 0; padding: 0.3in 0.3in 0.56in 0.3in; }
+      .page { width: 100%; margin: 0; padding: 0.3in; }
       @page { size: letter; margin: 0; }
     }
   </style>
@@ -95,29 +122,19 @@ word-spacing: -0.01em;}
 <body>
   <div class="page">
     <div class="header">
-      <h1>Adwait Pradip Relekar</h1>
+      <h1>${personal.full_name}</h1>
       <div class="contact">
-        Redmond, WA | <a href="mailto:adrelekar25@gmail.com">adrelekar25@gmail.com</a> | (206) 670-6509 | <a href="https://www.linkedin.com/in/relekaradwait/">linkedin.com/in/relekaradwait/</a>
+        ${contactHTML}
       </div>
     </div>
-    <div class="section">
+    ${
+      educationHTML
+        ? `<div class="section">
       <div class="section-title">Education:</div>
-      <div class="edu-entry">
-        <div class="edu-row">
-          <span class="edu-school">Northeastern University, Boston, MA</span>
-          <span class="edu-date">Dec 2025</span>
-        </div>
-        <div>Master of Science, Computer Software Engineering, 3.84/4.0</div>
-        <div>Relevant Courses: Mobile &amp; Web Development, Web Tools, Data Structures &amp; Algorithms, DB Design, UI/UX, Big Data Indexing</div>
-      </div>
-      <div class="edu-entry">
-        <div class="edu-row">
-          <span class="edu-school">MIT College of Engineering, Pune University, India</span>
-          <span class="edu-date">May 2019</span>
-        </div>
-        <div>Bachelor of Engineering, Electronics &amp; Telecommunications</div>
-      </div>
-    </div>
+      ${educationHTML}
+    </div>`
+        : ""
+    }
     <div class="section">
       <div class="section-title">Technical Skills:</div>
       <table class="skills-table">${skillsHTML}</table>
