@@ -11,9 +11,24 @@ export {
     overlayVersionOnMaster,
     type StateSnapshot,
     type ProjectStateSnapshot,
+    type WorkStateSnapshot,
     type BulletStateSnapshot,
     type SkillStateSnapshot,
 } from "./versionConversion";
+
+// The work_state column ships in a later migration. Until it's applied, writes
+// that include it fail with "column does not exist" (Postgres 42703); detect
+// that so we can retry without the column and keep versioning working.
+function isMissingWorkStateColumn(error: {
+    code?: string;
+    message?: string;
+} | null): boolean {
+    if (!error) return false;
+    return (
+        error.code === "42703" ||
+        (error.message?.includes("work_state") ?? false)
+    );
+}
 
 // A version is a per-company overlay stored as JSONB. The master lives in the
 // normalized tables (loadState). Loading a version never mutates the master:
@@ -86,6 +101,7 @@ export async function buildVersionEditorState(
     if (!version) return null;
     return overlayVersionOnMaster(master, {
         projects_state: version.projects_state ?? [],
+        work_state: version.work_state ?? [],
         bullets_state: version.bullets_state ?? [],
         skills_state: version.skills_state ?? [],
     });
@@ -98,16 +114,27 @@ export async function saveVersion(
 ): Promise<ResumeVersion | null> {
     const profileId = await getProfileId();
     if (!profileId) return null;
-    const { data, error } = await supabase
+    const snapshot = stateToSnapshot(state);
+    const base = { profile_id: profileId, name, company_name: companyName };
+    let { data, error } = await supabase
         .from("resume_versions")
-        .insert({
-            profile_id: profileId,
-            name,
-            company_name: companyName,
-            ...stateToSnapshot(state),
-        })
+        .insert({ ...base, ...snapshot })
         .select(VERSION_META_COLUMNS)
         .single();
+    if (error && isMissingWorkStateColumn(error)) {
+        console.warn(
+            "resume_versions.work_state column missing — apply migration " +
+                "20260717120000_add_work_state_to_versions. Saving without it; " +
+                "net-new experience entries won't persist until it's applied.",
+        );
+        const { work_state, ...rest } = snapshot;
+        void work_state;
+        ({ data, error } = await supabase
+            .from("resume_versions")
+            .insert({ ...base, ...rest })
+            .select(VERSION_META_COLUMNS)
+            .single());
+    }
     if (error) {
         console.error("Failed to save version:", error);
         throw new Error(error.message);
@@ -122,11 +149,26 @@ export async function saveVersionState(
 ): Promise<boolean> {
     const profileId = await getProfileId();
     if (!profileId) return false;
-    const { error } = await supabase
+    const snapshot = stateToSnapshot(state);
+    let { error } = await supabase
         .from("resume_versions")
-        .update(stateToSnapshot(state))
+        .update(snapshot)
         .eq("id", id)
         .eq("profile_id", profileId);
+    if (error && isMissingWorkStateColumn(error)) {
+        console.warn(
+            "resume_versions.work_state column missing — apply migration " +
+                "20260717120000_add_work_state_to_versions. Saving without it; " +
+                "net-new experience entries won't persist until it's applied.",
+        );
+        const { work_state, ...rest } = snapshot;
+        void work_state;
+        ({ error } = await supabase
+            .from("resume_versions")
+            .update(rest)
+            .eq("id", id)
+            .eq("profile_id", profileId));
+    }
     if (error) {
         console.error("Failed to save version state:", error);
         return false;
@@ -161,18 +203,30 @@ export async function duplicateVersion(
     if (!profileId) return null;
     const source = await getVersion(id);
     if (!source) return null;
-    const { data, error } = await supabase
+    const base = {
+        profile_id: profileId,
+        name: newName,
+        company_name: source.company_name,
+        projects_state: source.projects_state,
+        bullets_state: source.bullets_state,
+        skills_state: source.skills_state,
+    };
+    let { data, error } = await supabase
         .from("resume_versions")
-        .insert({
-            profile_id: profileId,
-            name: newName,
-            company_name: source.company_name,
-            projects_state: source.projects_state,
-            bullets_state: source.bullets_state,
-            skills_state: source.skills_state,
-        })
+        .insert({ ...base, work_state: source.work_state ?? [] })
         .select(VERSION_META_COLUMNS)
         .single();
+    if (error && isMissingWorkStateColumn(error)) {
+        console.warn(
+            "resume_versions.work_state column missing — apply migration " +
+                "20260717120000_add_work_state_to_versions.",
+        );
+        ({ data, error } = await supabase
+            .from("resume_versions")
+            .insert(base)
+            .select(VERSION_META_COLUMNS)
+            .single());
+    }
     if (error) {
         console.error("Failed to duplicate version:", error);
         return null;
