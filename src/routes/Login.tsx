@@ -9,11 +9,9 @@ import {
   ClipboardList,
   Download,
   ArrowRight,
-  Bot,
-  ScanSearch,
   Users,
-  PenLine,
 } from "lucide-react";
+import PipelineShowcase from "@/components/PipelineShowcase";
 
 async function signInWithGoogle() {
   const { error } = await supabase.auth.signInWithOAuth({
@@ -47,15 +45,6 @@ const FEATURES = [
     title: "Bring your own AI, privately",
     body: "Use your own Anthropic or OpenAI-compatible key. It's encrypted server-side and never stored in your browser. No resume data trains anyone's model.",
   },
-];
-
-const PIPELINE = [
-  { icon: ScanSearch, label: "Filter" },
-  { icon: Users, label: "Recruiter" },
-  { icon: ClipboardList, label: "Hiring Manager" },
-  { icon: Target, label: "ATS" },
-  { icon: PenLine, label: "Content Writer" },
-  { icon: Bot, label: "Editor" },
 ];
 
 const STEPS = [
@@ -145,25 +134,22 @@ export default function Login() {
             </span>
           </div>
 
-          {/* Pipeline visual */}
-          <div className="mx-auto mt-16 max-w-2xl">
-            <p className="mb-4 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              Your resume runs through
+        </div>
+      </section>
+
+      {/* Animated dual-pipeline explainer */}
+      <section className="border-b border-border">
+        <div className="mx-auto max-w-5xl px-5 py-20">
+          <div className="mx-auto mb-10 max-w-2xl text-center">
+            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              Two ways to tailor
+            </h2>
+            <p className="mt-3 text-muted-foreground">
+              Let the agents run end-to-end, or steer every phase yourself.
+              Watch how each mode works.
             </p>
-            <div className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-2">
-              {PIPELINE.map((s, i) => (
-                <div key={s.label} className="flex items-center gap-1.5">
-                  <span className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium shadow-xs">
-                    <s.icon className="size-3.5 text-primary" />
-                    {s.label}
-                  </span>
-                  {i < PIPELINE.length - 1 && (
-                    <ArrowRight className="size-3.5 shrink-0 text-muted-foreground/50" />
-                  )}
-                </div>
-              ))}
-            </div>
           </div>
+          <PipelineShowcase />
         </div>
       </section>
 

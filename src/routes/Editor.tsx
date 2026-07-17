@@ -35,12 +35,24 @@ import ProjectsTab from "./../components/ProjectsTab";
 import ExperienceTab from "./../components/ExperienceTab";
 import SkillsTab from "./../components/SkillsTab";
 import VersionBar from "./../components/VersionBar";
-import Onboarding, { ONBOARDING_KEY } from "./../components/Onboarding";
+import Onboarding, { ONBOARDING_CUTOFF } from "./../components/Onboarding";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
 import {
   Download,
   LogOut,
@@ -51,8 +63,19 @@ import {
   CheckCircle2,
   Sparkles,
   UserRound,
+  PanelLeft,
+  PanelRight,
+  Menu,
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Eye,
+  PencilLine,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { cn } from "@/lib/utils";
 
 type Section = "projects" | "experience" | "skills";
 
@@ -102,6 +125,14 @@ export default function Editor() {
   // Letter page is 8.5in wide (816px @96dpi); scale preview to fit the pane.
   const PAGE_W = 8.5 * 96;
   const [previewScale, setPreviewScale] = useState(0.6);
+  // Panel collapse (desktop), mobile view switch, and preview zoom override.
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
+  const [mobileView, setMobileView] = useState<"edit" | "preview" | "tailor">(
+    "edit",
+  );
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [zoom, setZoom] = useState<number | null>(null); // null = auto-fit
 
   const { user, signOut } = useAuth();
 
@@ -157,20 +188,20 @@ export default function Editor() {
     refreshVersions();
   }, [refresh, refreshVersions]);
 
-  // First-run onboarding: open the wizard once, for a genuinely empty master,
-  // unless the user has completed/skipped it before. Evaluated a single time so
-  // importing mid-flow (which fills the master) can't unmount the wizard.
+  // First-run onboarding: shown once per account, for every signup made after
+  // this feature shipped, and never for pre-existing accounts. Completion is
+  // stored in the account's Supabase user metadata, so it follows the user
+  // across devices. Evaluated a single time once the user is known.
   useEffect(() => {
-    if (!loaded || onboardCheckedRef.current) return;
+    if (!user || onboardCheckedRef.current) return;
     onboardCheckedRef.current = true;
-    if (localStorage.getItem(ONBOARDING_KEY)) return;
-    const emptyMaster =
-      !activeVersionIdRef.current &&
-      work.length === 0 &&
-      projects.length === 0 &&
-      Object.keys(skills).length === 0;
-    if (emptyMaster) setShowOnboarding(true);
-  }, [loaded, work.length, projects.length, skills]);
+    const meta = user.user_metadata as { onboarded?: boolean } | undefined;
+    if (meta?.onboarded) return;
+    const createdAt = user.created_at ? Date.parse(user.created_at) : NaN;
+    if (!Number.isNaN(createdAt) && createdAt >= ONBOARDING_CUTOFF) {
+      setShowOnboarding(true);
+    }
+  }, [user]);
 
   // Sync active company label once versions load.
   useEffect(() => {
@@ -196,8 +227,11 @@ export default function Editor() {
     const pane = previewPaneRef.current;
     if (!pane) return;
     const update = () => {
-      const avail = pane.clientWidth - 32;
-      setPreviewScale(Math.max(0.3, Math.min(1, avail / PAGE_W)));
+      const w = pane.clientWidth;
+      // Ignore pre-layout / hidden reads — otherwise the fit locks to the floor.
+      if (w < 50) return;
+      const avail = w - 24;
+      setPreviewScale(Math.max(0.5, Math.min(1, avail / PAGE_W)));
     };
     update();
     const ro = new ResizeObserver(update);
@@ -579,167 +613,332 @@ export default function Editor() {
     { key: "projects", label: "Projects", icon: <FolderGit2 /> },
   ];
 
+  // Preview zoom: null = auto-fit to the pane; a number overrides it.
+  const effectiveScale = zoom ?? previewScale;
+  const zoomBy = (delta: number) =>
+    setZoom((z) => Math.min(2, Math.max(0.3, (z ?? previewScale) + delta)));
+
+  // Versions + export — shared by the desktop sidebar and the mobile sheet.
+  const resumePanel = (
+    <>
+      <VersionBar
+        versions={versions}
+        activeVersionId={activeVersionId}
+        onSwitch={(id) => {
+          switchTo(id);
+          setMobileMenuOpen(false);
+        }}
+        onSaveNew={handleSaveNewVersion}
+        onRename={handleRenameVersion}
+        onDuplicate={handleDuplicateVersion}
+        onDelete={handleDeleteVersion}
+      />
+      <Separator />
+      <div className="flex flex-col gap-1.5">
+        <span className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          Actions
+        </span>
+        <Button
+          variant="outline"
+          size="lg"
+          className="w-full justify-start"
+          onClick={exportPDF}
+        >
+          <Download />
+          Export PDF
+        </Button>
+      </div>
+      <div className="px-1 text-[11px] text-muted-foreground">
+        {`PDF: ${namePrefix(personal.full_name)}_Resume_${sanitizeCompany(activeCompany)}.pdf`}
+      </div>
+    </>
+  );
+
+  const MOBILE_VIEWS: { key: typeof mobileView; label: string; icon: React.ReactNode }[] =
+    [
+      { key: "edit", label: "Edit", icon: <PencilLine /> },
+      { key: "preview", label: "Preview", icon: <Eye /> },
+      { key: "tailor", label: "Tailor", icon: <Sparkles /> },
+    ];
+
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
+    <div className="flex h-[100dvh] flex-col bg-background text-foreground">
       {/* Top bar */}
-      <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <Sparkles className="size-4 text-primary" />
-          Resume Builder
+      <header className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-2 sm:px-4">
+        <div className="flex min-w-0 items-center gap-1">
+          {/* Mobile: open versions/export drawer */}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="lg:hidden"
+            onClick={() => setMobileMenuOpen(true)}
+            title="Versions & export"
+          >
+            <Menu />
+          </Button>
+          {/* Desktop: collapse left sidebar */}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="hidden lg:inline-flex"
+            onClick={() => setLeftOpen((o) => !o)}
+            title={leftOpen ? "Hide sidebar" : "Show sidebar"}
+          >
+            <PanelLeft className={cn(leftOpen && "text-primary")} />
+          </Button>
+          <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
+            <Sparkles className="size-4 shrink-0 text-primary" />
+            <span className="truncate">Resume Builder</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="hidden text-xs text-muted-foreground sm:inline">
+        <div className="flex items-center gap-1 sm:gap-2">
+          <span className="hidden text-xs text-muted-foreground xl:inline">
             {user?.email}
           </span>
+          {/* Desktop: collapse right (tailor) panel */}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="hidden lg:inline-flex"
+            onClick={() => setRightOpen((o) => !o)}
+            title={rightOpen ? "Hide tailor panel" : "Show tailor panel"}
+          >
+            <PanelRight className={cn(rightOpen && "text-primary")} />
+          </Button>
           <ApiSettings />
-          <Button variant="ghost" size="sm" asChild>
+          <Button variant="ghost" size="sm" asChild className="hidden lg:inline-flex">
             <Link to="/profile">
               <UserRound />
               Profile
             </Link>
           </Button>
-          <Button variant="ghost" size="sm" onClick={signOut}>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={signOut}
+            className="hidden lg:inline-flex"
+          >
             <LogOut />
             Sign out
           </Button>
+          {/* Mobile: account menu */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild className="lg:hidden">
+              <Button variant="ghost" size="icon-sm" title="Account">
+                <UserRound />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem asChild>
+                <Link to="/profile">
+                  <UserRound />
+                  Profile
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => signOut()}>
+                <LogOut />
+                Sign out
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        {/* Left sidebar */}
-        <aside className="flex w-64 shrink-0 flex-col gap-4 border-r border-border p-3">
-          <VersionBar
-            versions={versions}
-            activeVersionId={activeVersionId}
-            onSwitch={switchTo}
-            onSaveNew={handleSaveNewVersion}
-            onRename={handleRenameVersion}
-            onDuplicate={handleDuplicateVersion}
-            onDelete={handleDeleteVersion}
-          />
-          <Separator />
-          <div className="flex flex-col gap-1.5">
-            <span className="px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Actions
-            </span>
-            <Button
-              variant="outline"
-              size="lg"
-              className="w-full justify-start"
-              onClick={exportPDF}
-            >
-              <Download />
-              Export PDF
-            </Button>
-          </div>
-          <div className="mt-auto px-1 text-[11px] text-muted-foreground">
-            {`PDF: ${namePrefix(personal.full_name)}_Resume_${sanitizeCompany(activeCompany)}.pdf`}
-          </div>
+      <main className="flex min-h-0 flex-1">
+        {/* Left sidebar — desktop only, collapsible */}
+        <aside
+          className={cn(
+            "hidden shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-3",
+            leftOpen ? "lg:flex lg:w-64" : "lg:hidden",
+          )}
+        >
+          {resumePanel}
         </aside>
 
-        {/* Center: editor and live preview side by side */}
-        <main className="flex min-w-0 flex-1">
-          {/* Edit pane */}
-          <section className="flex w-[44%] min-w-[340px] flex-col border-r border-border bg-background">
-            <div className="flex h-12 shrink-0 items-center border-b border-border px-4">
-              <Tabs value={section} onValueChange={(v) => setSection(v as Section)}>
-                <TabsList>
-                  {SECTIONS.map((s) => (
-                    <TabsTrigger key={s.key} value={s.key}>
-                      {s.icon}
-                      {s.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              </Tabs>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto p-4">
-              {section === "projects" && (
-                <ProjectsTab
-                  projects={sortedProjects}
-                  selectedProjects={selectedProjects}
-                  toggleProject={toggleProject}
-                  updateProject={updateProject}
-                  deleteProject={deleteProject}
-                  addProject={addProject}
-                  excludedBullets={excludedBullets}
-                  toggleBulletExcluded={toggleBulletExcluded}
-                  reorderProjects={reorderProjects}
-                />
-              )}
-              {section === "experience" && (
-                <ExperienceTab
-                  work={work}
-                  updateWork={updateWork}
-                  deleteWork={deleteWork}
-                  addWork={addWork}
-                  excludedBullets={excludedBullets}
-                  toggleBulletExcluded={toggleBulletExcluded}
-                  reorderWork={reorderWork}
-                />
-              )}
-              {section === "skills" && (
-                <SkillsTab
-                  skills={skills}
-                  setSkills={setSkills}
-                  reorderSkills={reorderSkills}
-                  selectedSkills={selectedSkills}
-                  toggleSkill={toggleSkill}
-                />
-              )}
-            </div>
-          </section>
+        {/* Center: edit + preview — grouped on desktop, split into
+            separate mobile views via `display: contents`. */}
+        <div className="contents lg:flex lg:min-h-0 lg:min-w-0 lg:flex-1">
+        {/* Edit pane */}
+        <section
+          className={cn(
+            "min-h-0 min-w-0 flex-1 flex-col border-border bg-background",
+            mobileView === "edit" ? "flex" : "hidden",
+            "lg:flex lg:w-[44%] lg:min-w-[340px] lg:flex-none lg:border-r",
+          )}
+        >
+          <div className="flex h-12 shrink-0 items-center border-b border-border px-4">
+            <Tabs value={section} onValueChange={(v) => setSection(v as Section)}>
+              <TabsList>
+                {SECTIONS.map((s) => (
+                  <TabsTrigger key={s.key} value={s.key}>
+                    {s.icon}
+                    {s.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {section === "projects" && (
+              <ProjectsTab
+                projects={sortedProjects}
+                selectedProjects={selectedProjects}
+                toggleProject={toggleProject}
+                updateProject={updateProject}
+                deleteProject={deleteProject}
+                addProject={addProject}
+                excludedBullets={excludedBullets}
+                toggleBulletExcluded={toggleBulletExcluded}
+                reorderProjects={reorderProjects}
+              />
+            )}
+            {section === "experience" && (
+              <ExperienceTab
+                work={work}
+                updateWork={updateWork}
+                deleteWork={deleteWork}
+                addWork={addWork}
+                excludedBullets={excludedBullets}
+                toggleBulletExcluded={toggleBulletExcluded}
+                reorderWork={reorderWork}
+              />
+            )}
+            {section === "skills" && (
+              <SkillsTab
+                skills={skills}
+                setSkills={setSkills}
+                reorderSkills={reorderSkills}
+                selectedSkills={selectedSkills}
+                toggleSkill={toggleSkill}
+              />
+            )}
+          </div>
+        </section>
 
-          {/* Preview pane */}
-          <section className="flex min-w-0 flex-1 flex-col bg-muted/30">
-            <div className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-              <span className="text-sm font-medium text-muted-foreground">
-                Live preview
-              </span>
+        {/* Preview pane */}
+        <section
+          className={cn(
+            "min-h-0 min-w-0 flex-1 flex-col bg-muted/30",
+            mobileView === "preview" ? "flex" : "hidden",
+            "lg:flex",
+          )}
+        >
+          <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-2 sm:px-3">
+            {/* Zoom controls */}
+            <div className="flex items-center gap-0.5">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => zoomBy(-0.1)}
+                title="Zoom out"
+              >
+                <ZoomOut />
+              </Button>
+              <button
+                onClick={() => setZoom(null)}
+                title="Reset to fit"
+                className="min-w-[3rem] rounded-md px-1 py-0.5 text-center text-xs font-medium text-muted-foreground tabular-nums transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {Math.round(effectiveScale * 100)}%
+              </button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => zoomBy(0.1)}
+                title="Zoom in"
+              >
+                <ZoomIn />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setZoom(null)}
+                title="Fit to width"
+                className="hidden sm:inline-flex"
+              >
+                <Maximize2 />
+              </Button>
+            </div>
+            <div className="flex items-center gap-2">
               {overflowWarning ? (
                 <Badge variant="warning">
                   <AlertTriangle className="size-3" />
-                  Overflows one page
+                  <span className="hidden sm:inline">Overflows one page</span>
+                  <span className="sm:hidden">Overflow</span>
                 </Badge>
               ) : (
                 <Badge variant="success">
                   <CheckCircle2 className="size-3" />
-                  Fits one page
+                  <span className="hidden sm:inline">Fits one page</span>
+                  <span className="sm:hidden">Fits</span>
                 </Badge>
               )}
-            </div>
-            <div ref={previewPaneRef} className="flex min-h-0 flex-1 justify-center overflow-auto p-4">
-              <div
-                style={{
-                  width: `${8.5 * previewScale}in`,
-                  height: `${11 * previewScale}in`,
-                  flexShrink: 0,
-                }}
+              {/* Always-available export, independent of the left sidebar. */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportPDF}
+                title="Export PDF"
               >
-                <iframe
-                  ref={iframeRef}
-                  srcDoc={resumeHTML}
-                  onLoad={handlePreviewLoad}
-                  title="Resume Preview"
-                  style={{
-                    width: "8.5in",
-                    height: "11in",
-                    transform: `scale(${previewScale})`,
-                    transformOrigin: "top left",
-                  }}
-                  className="rounded-sm border-none bg-white shadow-[0_4px_24px_rgba(0,0,0,0.12)]"
-                />
-              </div>
+                <Download />
+                <span className="hidden sm:inline">Export PDF</span>
+              </Button>
             </div>
-          </section>
-        </main>
+          </div>
+          <div
+            ref={previewPaneRef}
+            className="flex min-h-0 flex-1 justify-center overflow-auto p-4"
+          >
+            <div
+              style={{
+                width: `${8.5 * effectiveScale}in`,
+                height: `${11 * effectiveScale}in`,
+                flexShrink: 0,
+              }}
+            >
+              <iframe
+                ref={iframeRef}
+                srcDoc={resumeHTML}
+                onLoad={handlePreviewLoad}
+                title="Resume Preview"
+                style={{
+                  width: "8.5in",
+                  height: "11in",
+                  transform: `scale(${effectiveScale})`,
+                  transformOrigin: "top left",
+                }}
+                className="rounded-sm border-none bg-white shadow-[0_4px_24px_rgba(0,0,0,0.12)]"
+              />
+            </div>
+          </div>
+        </section>
+        </div>
 
-        {/* Right sidebar: JD + agent reasoning */}
-        <aside className="flex w-[380px] shrink-0 flex-col border-l border-border">
-          <div className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-            <span className="flex items-center gap-2 text-sm font-semibold">
-              <Sparkles className="size-4 text-primary" />
-              Tailor from JD
+        {/* Right sidebar: Tailor from JD — collapsible (desktop) + mobile view */}
+        <aside
+          className={cn(
+            "relative min-h-0 min-w-0 flex-1 flex-col border-border",
+            mobileView === "tailor" ? "flex" : "hidden",
+            rightOpen
+              ? "lg:flex lg:w-[380px] lg:flex-none lg:border-l"
+              : "lg:hidden",
+          )}
+        >
+          {/* Floating grip on the divider — collapse the panel (desktop). */}
+          {rightOpen && (
+            <button
+              onClick={() => setRightOpen(false)}
+              title="Collapse panel"
+              aria-label="Collapse tailor panel"
+              className="absolute -left-3 top-1/2 z-10 hidden h-16 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:border-primary hover:bg-muted hover:text-foreground lg:flex"
+            >
+              <ChevronRight className="size-4" />
+            </button>
+          )}
+          <div className="flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border px-3">
+            <span className="flex min-w-0 items-center gap-2 text-sm font-semibold">
+              <Sparkles className="size-4 shrink-0 text-primary" />
+              <span className="truncate">Tailor from JD</span>
             </span>
             <Tabs
               value={tailorMode}
@@ -772,7 +971,61 @@ export default function Editor() {
             )}
           </div>
         </aside>
-      </div>
+
+        {/* Collapsed Tailor panel — clickable rail with a matching grip (desktop). */}
+        {!rightOpen && (
+          <div className="relative hidden shrink-0 border-l border-border lg:flex">
+            {/* Floating grip on the divider — expand the panel. */}
+            <button
+              onClick={() => setRightOpen(true)}
+              title="Show tailor panel"
+              aria-label="Expand tailor panel"
+              className="absolute -left-3 top-1/2 z-10 flex h-16 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:border-primary hover:bg-muted hover:text-foreground"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+            <button
+              onClick={() => setRightOpen(true)}
+              title="Show tailor panel"
+              className="flex w-11 flex-col items-center gap-2 py-4 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <Sparkles className="size-4 text-primary" />
+              <span className="text-xs font-medium tracking-wide [writing-mode:vertical-rl]">
+                Tailor from JD
+              </span>
+            </button>
+          </div>
+        )}
+      </main>
+
+      {/* Mobile: view switcher */}
+      <nav className="flex shrink-0 border-t border-border lg:hidden">
+        {MOBILE_VIEWS.map((v) => (
+          <button
+            key={v.key}
+            onClick={() => setMobileView(v.key)}
+            className={cn(
+              "flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-medium transition-colors [&_svg]:size-5",
+              mobileView === v.key
+                ? "text-primary"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            {v.icon}
+            {v.label}
+          </button>
+        ))}
+      </nav>
+
+      {/* Mobile: versions + export drawer */}
+      <Dialog open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Resume &amp; versions</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-4">{resumePanel}</div>
+        </DialogContent>
+      </Dialog>
 
       {/* First-run multi-step onboarding: connect AI, import a resume, tour. */}
       {showOnboarding && (

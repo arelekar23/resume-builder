@@ -22,13 +22,18 @@ import {
   fetchKeyStatus,
   saveKey,
 } from "../utils/keyVault";
+import { supabase } from "../lib/supabase";
 import ResumeUpload from "./ResumeUpload";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
-export const ONBOARDING_KEY = "resumeBuilder.onboardingComplete";
+// Onboarding completion is stored per-account in Supabase user metadata
+// (`user_metadata.onboarded`), so it follows the user across browsers/devices.
+// Accounts created before this timestamp are treated as existing users and
+// never see onboarding; every signup from here on sees it once.
+export const ONBOARDING_CUTOFF = Date.parse("2026-07-17T00:00:00Z");
 
 const STEPS = [
   { key: "welcome", label: "Welcome", icon: Sparkles },
@@ -59,12 +64,14 @@ export default function Onboarding({
   }, []);
 
   function finish() {
-    try {
-      localStorage.setItem(ONBOARDING_KEY, "1");
-    } catch {
-      /* ignore */
-    }
+    // Close immediately; persist the per-account flag in the background so the
+    // wizard never reappears for this account on any device.
     onComplete();
+    void supabase.auth
+      .updateUser({ data: { onboarded: true } })
+      .catch(() => {
+        /* best-effort; the account-age cutoff still bounds re-shows */
+      });
   }
 
   const next = () => setStep((s) => Math.min(s + 1, STEPS.length - 1));
