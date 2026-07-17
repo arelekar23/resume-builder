@@ -1,41 +1,246 @@
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/lib/supabase";
+import {
+  Sparkles,
+  Layers3,
+  Target,
+  ShieldCheck,
+  FileUp,
+  ClipboardList,
+  Download,
+  ArrowRight,
+  Users,
+} from "lucide-react";
+import PipelineShowcase from "@/components/PipelineShowcase";
+
+async function signInWithGoogle() {
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: { redirectTo: `${window.location.origin}/` },
+  });
+  if (error) {
+    console.error("Sign-in error:", error);
+    alert("Sign-in failed. Please try again.");
+  }
+}
+
+const FEATURES = [
+  {
+    icon: Users,
+    title: "A hiring panel, not a template",
+    body: "Six specialized agents — recruiter, hiring manager, ATS, and a content editor — read the job and rebuild your resume the way a real screening team would.",
+  },
+  {
+    icon: Layers3,
+    title: "One master, many versions",
+    body: "Keep a single source-of-truth resume. Every job gets its own saved, named version — your master is never overwritten.",
+  },
+  {
+    icon: Target,
+    title: "Beats the ATS",
+    body: "Keyword-gap analysis surfaces exactly what a job asks for, then weaves the missing terms into your real experience with a before/after score.",
+  },
+  {
+    icon: ShieldCheck,
+    title: "Bring your own AI, privately",
+    body: "Use your own Anthropic or OpenAI-compatible key. It's encrypted server-side and never stored in your browser. No resume data trains anyone's model.",
+  },
+];
+
+const STEPS = [
+  {
+    icon: FileUp,
+    title: "Import your resume",
+    body: "Drop in your existing PDF. AI extracts your experience, projects, and skills into an editable master.",
+  },
+  {
+    icon: ClipboardList,
+    title: "Paste a job description",
+    body: "The agent panel scores your fit, re-selects the strongest bullets, and rewrites them to match the role.",
+  },
+  {
+    icon: Download,
+    title: "Export a one-page PDF",
+    body: "A live preview guarantees a clean single page. Save the version per company and download instantly.",
+  },
+];
 
 export default function Login() {
-  async function signInWithGoogle() {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: {
-        redirectTo: `${window.location.origin}/`,
-      },
-    });
-
-    if (error) {
-      console.error("Sign-in error:", error);
-      alert("Sign-in failed. Please try again.");
-    }
-  }
-
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm space-y-8">
-        <div className="text-center space-y-2">
-          <h1 className="text-2xl font-semibold tracking-tight">
+    <div className="min-h-screen bg-background text-foreground">
+      {/* Top nav */}
+      <header className="sticky top-0 z-20 border-b border-border/60 bg-background/80 backdrop-blur">
+        <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5">
+          <div className="flex items-center gap-2 text-sm font-semibold">
+            <Sparkles className="size-4 text-primary" />
             Resume Builder
-          </h1>
-          <p className="text-sm text-muted-foreground">Sign in to continue</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={signInWithGoogle}>
+            <GoogleIcon />
+            Sign in
+          </Button>
         </div>
+      </header>
 
-        <Button
-          onClick={signInWithGoogle}
-          size="lg"
-          variant="outline"
-          className="w-full"
-        >
-          <GoogleIcon />
-          Continue with Google
-        </Button>
-      </div>
+      {/* Hero */}
+      <section className="relative overflow-hidden border-b border-border">
+        {/* soft brand backdrop */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 -z-10"
+          style={{
+            background:
+              "radial-gradient(60% 55% at 50% 0%, color-mix(in oklch, var(--primary) 14%, transparent) 0%, transparent 70%)",
+          }}
+        />
+        <div
+          aria-hidden
+          className="pointer-events-none absolute inset-0 -z-10 opacity-[0.04]"
+          style={{
+            backgroundImage:
+              "linear-gradient(var(--foreground) 1px, transparent 1px), linear-gradient(90deg, var(--foreground) 1px, transparent 1px)",
+            backgroundSize: "44px 44px",
+            maskImage:
+              "radial-gradient(70% 60% at 50% 0%, black 0%, transparent 75%)",
+          }}
+        />
+
+        <div className="mx-auto max-w-3xl px-5 py-20 text-center sm:py-28">
+          <div className="mx-auto mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
+            <Sparkles className="size-3.5 text-primary" />
+            AI resume tailoring · bring your own key
+          </div>
+
+          <h1 className="text-balance text-4xl font-semibold leading-[1.08] tracking-tight sm:text-6xl">
+            Tailor your resume to every job,
+            <br className="hidden sm:block" />{" "}
+            <span className="text-primary">with a team of AI experts.</span>
+          </h1>
+
+          <p className="mx-auto mt-6 max-w-xl text-balance text-base text-muted-foreground sm:text-lg">
+            Keep one master resume. For every application, a six-agent pipeline
+            re-selects and rewrites it to match the role, optimizes for the ATS,
+            and exports a polished one-page PDF.
+          </p>
+
+          <div className="mt-9 flex flex-col items-center justify-center gap-3 sm:flex-row">
+            <Button size="lg" onClick={signInWithGoogle} className="h-11 px-5 text-sm">
+              <GoogleIcon />
+              Continue with Google
+              <ArrowRight />
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              Free to use · you supply your own AI key
+            </span>
+          </div>
+
+        </div>
+      </section>
+
+      {/* Animated dual-pipeline explainer */}
+      <section className="border-b border-border">
+        <div className="mx-auto max-w-5xl px-5 py-20">
+          <div className="mx-auto mb-10 max-w-2xl text-center">
+            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              Two ways to tailor
+            </h2>
+            <p className="mt-3 text-muted-foreground">
+              Let the agents run end-to-end, or steer every phase yourself.
+              Watch how each mode works.
+            </p>
+          </div>
+          <PipelineShowcase />
+        </div>
+      </section>
+
+      {/* Features */}
+      <section className="mx-auto max-w-5xl px-5 py-20">
+        <div className="mx-auto mb-12 max-w-2xl text-center">
+          <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+            More than a formatter
+          </h2>
+          <p className="mt-3 text-muted-foreground">
+            It reasons about the job like a hiring team — then rewrites your
+            resume to win the six-second read.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {FEATURES.map((f) => (
+            <div
+              key={f.title}
+              className="group rounded-xl border border-border bg-card p-5 transition-colors hover:border-primary/40"
+            >
+              <div className="mb-3 inline-flex size-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <f.icon className="size-4.5" />
+              </div>
+              <h3 className="text-sm font-semibold">{f.title}</h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                {f.body}
+              </p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* How it works */}
+      <section className="border-t border-border bg-muted/30">
+        <div className="mx-auto max-w-5xl px-5 py-20">
+          <div className="mx-auto mb-12 max-w-2xl text-center">
+            <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+              Three steps to a tailored resume
+            </h2>
+            <p className="mt-3 text-muted-foreground">
+              From existing PDF to job-ready in about a minute.
+            </p>
+          </div>
+          <div className="grid gap-6 sm:grid-cols-3">
+            {STEPS.map((s, i) => (
+              <div key={s.title} className="relative">
+                <div className="mb-4 flex items-center gap-3">
+                  <span className="inline-flex size-8 items-center justify-center rounded-lg border border-border bg-background text-sm font-semibold text-primary">
+                    {i + 1}
+                  </span>
+                  <s.icon className="size-4.5 text-muted-foreground" />
+                </div>
+                <h3 className="text-sm font-semibold">{s.title}</h3>
+                <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                  {s.body}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Closing CTA */}
+      <section className="border-t border-border">
+        <div className="mx-auto max-w-3xl px-5 py-20 text-center">
+          <h2 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+            Stop sending the same resume everywhere
+          </h2>
+          <p className="mx-auto mt-3 max-w-lg text-muted-foreground">
+            Sign in and build your master resume in minutes. Every application
+            after that is one paste away.
+          </p>
+          <div className="mt-8">
+            <Button size="lg" onClick={signInWithGoogle} className="h-11 px-5 text-sm">
+              <GoogleIcon />
+              Continue with Google
+              <ArrowRight />
+            </Button>
+          </div>
+        </div>
+      </section>
+
+      <footer className="border-t border-border">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-5 py-6 text-xs text-muted-foreground sm:flex-row">
+          <div className="flex items-center gap-2">
+            <Sparkles className="size-3.5 text-primary" />
+            Resume Builder
+          </div>
+          <span>Your data stays yours. Keys encrypted, never in the browser.</span>
+        </div>
+      </footer>
     </div>
   );
 }
