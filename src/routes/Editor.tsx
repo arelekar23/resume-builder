@@ -35,19 +35,12 @@ import ProjectsTab from "./../components/ProjectsTab";
 import ExperienceTab from "./../components/ExperienceTab";
 import SkillsTab from "./../components/SkillsTab";
 import VersionBar from "./../components/VersionBar";
-import ResumeUpload from "./../components/ResumeUpload";
+import Onboarding, { ONBOARDING_KEY } from "./../components/Onboarding";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
 import {
   Download,
   LogOut,
@@ -92,7 +85,8 @@ export default function Editor() {
   const [education, setEducation] = useState<EducationRow[]>([]);
   const [overflowWarning, setOverflowWarning] = useState(false);
   const [loaded, setLoaded] = useState(false);
-  const [onboardDismissed, setOnboardDismissed] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const onboardCheckedRef = useRef(false);
   const [activeCompany, setActiveCompany] = useState<string | null>(null);
   // null = Master (edits go to tables); a version = edits go to its snapshot.
   const [activeVersionId, setActiveVersionId] = useState<string | null>(
@@ -162,6 +156,21 @@ export default function Editor() {
     refresh();
     refreshVersions();
   }, [refresh, refreshVersions]);
+
+  // First-run onboarding: open the wizard once, for a genuinely empty master,
+  // unless the user has completed/skipped it before. Evaluated a single time so
+  // importing mid-flow (which fills the master) can't unmount the wizard.
+  useEffect(() => {
+    if (!loaded || onboardCheckedRef.current) return;
+    onboardCheckedRef.current = true;
+    if (localStorage.getItem(ONBOARDING_KEY)) return;
+    const emptyMaster =
+      !activeVersionIdRef.current &&
+      work.length === 0 &&
+      projects.length === 0 &&
+      Object.keys(skills).length === 0;
+    if (emptyMaster) setShowOnboarding(true);
+  }, [loaded, work.length, projects.length, skills]);
 
   // Sync active company label once versions load.
   useEffect(() => {
@@ -570,16 +579,6 @@ export default function Editor() {
     { key: "projects", label: "Projects", icon: <FolderGit2 /> },
   ];
 
-  // Show onboarding only on the empty Master (not a loaded version), once
-  // loaded, and until the user acts or dismisses it.
-  const showOnboarding =
-    loaded &&
-    !onboardDismissed &&
-    !activeVersionId &&
-    work.length === 0 &&
-    projects.length === 0 &&
-    Object.keys(skills).length === 0;
-
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       {/* Top bar */}
@@ -775,38 +774,16 @@ export default function Editor() {
         </aside>
       </div>
 
-      {/* First-time onboarding: import a resume to auto-populate the master. */}
-      <Dialog
-        open={showOnboarding}
-        onOpenChange={(o) => {
-          if (!o) setOnboardDismissed(true);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Welcome — let's build your master resume</DialogTitle>
-            <DialogDescription>
-              Upload your existing resume as a PDF and we'll fill in your
-              profile, experience, projects, and skills automatically. You can
-              edit everything afterward.
-            </DialogDescription>
-          </DialogHeader>
-          <ResumeUpload
-            onDone={async () => {
-              setOnboardDismissed(true);
-              await Promise.all([refresh(), refreshVersions(), loadProfile()]);
-            }}
-          />
-          <Button
-            variant="ghost"
-            size="sm"
-            className="w-full"
-            onClick={() => setOnboardDismissed(true)}
-          >
-            I'll start from scratch
-          </Button>
-        </DialogContent>
-      </Dialog>
+      {/* First-run multi-step onboarding: connect AI, import a resume, tour. */}
+      {showOnboarding && (
+        <Onboarding
+          email={user?.email ?? undefined}
+          onComplete={() => setShowOnboarding(false)}
+          onImported={async () => {
+            await Promise.all([refresh(), refreshVersions(), loadProfile()]);
+          }}
+        />
+      )}
     </div>
   );
 }
