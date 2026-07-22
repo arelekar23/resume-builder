@@ -12,6 +12,7 @@ import {
   Users,
 } from "lucide-react";
 import PipelineShowcase from "@/components/PipelineShowcase";
+import Logo from "@/components/Logo";
 
 async function signInWithGoogle() {
   const { error } = await supabase.auth.signInWithOAuth({
@@ -72,8 +73,8 @@ export default function Login() {
       <header className="sticky top-0 z-20 border-b border-border/60 bg-background/80 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-5">
           <div className="flex items-center gap-2 text-sm font-semibold">
-            <Sparkles className="size-4 text-primary" />
-            Resume Builder
+            <Logo className="size-5" />
+            AI Resume Builder
           </div>
           <Button variant="outline" size="sm" onClick={signInWithGoogle}>
             <GoogleIcon />
@@ -106,6 +107,9 @@ export default function Login() {
         />
 
         <div className="mx-auto max-w-3xl px-5 py-20 text-center sm:py-28">
+          <div className="mx-auto mb-7 flex size-16 items-center justify-center rounded-2xl border border-border bg-card shadow-sm">
+            <Logo className="size-9" />
+          </div>
           <div className="mx-auto mb-6 inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground">
             <Sparkles className="size-3.5 text-primary" />
             AI resume tailoring · bring your own key
@@ -235,8 +239,8 @@ export default function Login() {
       <footer className="border-t border-border">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-5 py-6 text-xs text-muted-foreground sm:flex-row">
           <div className="flex items-center gap-2">
-            <Sparkles className="size-3.5 text-primary" />
-            Resume Builder
+            <Logo className="size-4" />
+            AI Resume Builder
           </div>
           <span>Your data stays yours. Keys encrypted, never in the browser.</span>
         </div>

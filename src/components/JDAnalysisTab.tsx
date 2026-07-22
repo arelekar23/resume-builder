@@ -81,6 +81,8 @@ interface AnalyzeResponse {
 interface JDAnalysisTabProps {
   profileId: string;
   onApplyPlan: (plan: TailoringPlan) => void | Promise<void>;
+  // When true, ask the AI to also write a JD-tailored summary.
+  includeSummary?: boolean;
 }
 
 const VERDICT: Record<
@@ -162,6 +164,7 @@ function AgentSection({
 export default function JDAnalysisTab({
   profileId,
   onApplyPlan,
+  includeSummary,
 }: JDAnalysisTabProps) {
   const [jdText, setJdText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -247,6 +250,7 @@ export default function JDAnalysisTab({
         body: JSON.stringify({
           jdText: text,
           profileId,
+          includeSummary: !!includeSummary,
           stream: true,
         }),
       });

@@ -8,6 +8,8 @@ export interface ResumeState {
     skills: SkillsMap;
     work: WorkEntry[];
     excluded_bullets: string[];
+    // Master-base summary; a version can overlay its own tailored summary.
+    summary: string;
 }
 
 const EMPTY_STATE: ResumeState = {
@@ -16,7 +18,8 @@ const EMPTY_STATE: ResumeState = {
     projects: [],
     skills: {},
     work: [],
-    excluded_bullets: []
+    excluded_bullets: [],
+    summary: "",
 };
 
 // saveState diffs against this so we only write what actually changed.
@@ -50,6 +53,7 @@ export async function loadState(): Promise<ResumeState | null> {
             { data: workRows, error: workError },
             { data: workBulletRows, error: workBulletsError },
             { data: skillRows, error: skillsError },
+            { data: profileRow },
         ] = await Promise.all([
             supabase
                 .from("projects")
@@ -74,6 +78,11 @@ export async function loadState(): Promise<ResumeState | null> {
                 .select("category, items, position, is_selected")
                 .eq("profile_id", profileId)
                 .order("position", { ascending: true }),
+            supabase
+                .from("profiles")
+                .select("summary")
+                .eq("id", profileId)
+                .maybeSingle(),
         ]);
 
         const anyError =
@@ -133,7 +142,10 @@ export async function loadState(): Promise<ResumeState | null> {
             .filter((s) => s.is_selected)
             .map((s) => s.category);
 
-        const state: ResumeState = { selected_projects, selected_skills, projects, skills, work, excluded_bullets };
+        const summary =
+            typeof profileRow?.summary === "string" ? profileRow.summary : "";
+
+        const state: ResumeState = { selected_projects, selected_skills, projects, skills, work, excluded_bullets, summary };
         lastSaved = structuredClone(state);
         return state;
     } catch (e) {
@@ -436,6 +448,16 @@ export async function saveState(state: ResumeState): Promise<void> {
                         .eq("category", category),
                 );
             }
+        }
+
+        // Summary lives on the profiles row (master base). Diff and write.
+        if ((state.summary ?? "") !== (baseline.summary ?? "")) {
+            ops.push(
+                supabase
+                    .from("profiles")
+                    .update({ summary: state.summary?.trim() ? state.summary : null })
+                    .eq("id", profileId),
+            );
         }
 
         if (ops.length === 0) return;

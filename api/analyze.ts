@@ -61,6 +61,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             });
         }
         const phase = req.body?.phase as string | undefined;
+        // Client sets this when the resume uses a summary section, so the AI
+        // only writes a tailored summary when one is actually wanted.
+        const includeSummary = req.body?.includeSummary === true;
 
         // Reviews / ATS re-check run on the client-provided view, no DB read.
         if (phase === "ats" || phase === "recruiterReview" || phase === "hiringManagerReview") {
@@ -181,7 +184,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (!selection) {
                 return res.status(400).json({ error: "selection is required for the tailor phase" });
             }
-            const result = await runTailorPhase({ jdText, masterResume, guidance, selection, llm });
+            const result = await runTailorPhase({
+                jdText,
+                masterResume,
+                guidance,
+                selection,
+                llm,
+                hasSummary: includeSummary,
+            });
             return res.status(200).json(result);
         }
 
@@ -194,7 +204,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
             try {
                 const { plan, usage } = await runTailoringGraphStreaming(
-                    { jdText, masterResume, guidance, llm },
+                    { jdText, masterResume, guidance, llm, hasSummary: includeSummary },
                     (node) => send("progress", { node }),
                 );
                 send("result", { plan, usage });
@@ -205,7 +215,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             return;
         }
 
-        const { plan, usage } = await runTailoringGraph({ jdText, masterResume, guidance, llm });
+        const { plan, usage } = await runTailoringGraph({
+            jdText,
+            masterResume,
+            guidance,
+            llm,
+            hasSummary: includeSummary,
+        });
         return res.status(200).json({ plan, usage });
     } catch (err) {
         return res.status(500).json({ error: (err as Error).message });

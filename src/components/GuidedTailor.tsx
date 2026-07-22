@@ -50,6 +50,8 @@ interface GuidedTailorProps {
   getCurrentSelection: () => unknown;
   onApplyTailoredBullets: (bullets: { id: string; text: string }[]) => void;
   getResumeView: () => unknown;
+  includeSummary?: boolean;
+  onApplySummary?: (summary: string) => void;
 }
 
 async function postJson<T>(body: Record<string, unknown>): Promise<T> {
@@ -173,6 +175,8 @@ export default function GuidedTailor({
   getCurrentSelection,
   onApplyTailoredBullets,
   getResumeView,
+  includeSummary,
+  onApplySummary,
 }: GuidedTailorProps) {
   const [jdText, setJdText] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -282,17 +286,22 @@ export default function GuidedTailor({
       const r = await postJson<{
         projects?: { bullets: { id: string; text: string }[] }[];
         work?: { bullets: { id: string; text: string }[] }[];
+        summary?: string;
       }>({
         phase: "tailor",
         jdText: jd(),
         profileId,
         selection: getCurrentSelection(),
+        includeSummary: !!includeSummary,
       });
       const bullets = [
         ...(r.projects ?? []).flatMap((p) => p.bullets),
         ...(r.work ?? []).flatMap((w) => w.bullets),
       ].map((b) => ({ id: b.id, text: b.text }));
       onApplyTailoredBullets(bullets);
+      if (includeSummary && r.summary?.trim() && onApplySummary) {
+        onApplySummary(r.summary.trim());
+      }
     });
   }
 
