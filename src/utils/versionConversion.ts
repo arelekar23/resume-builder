@@ -46,6 +46,9 @@ export interface StateSnapshot {
     work_state: WorkStateSnapshot[];
     bullets_state: BulletStateSnapshot[];
     skills_state: SkillStateSnapshot[];
+    // The version's tailored summary. Overlays the master base; absent/"" falls
+    // back to master. Column ships in a later migration (graceful fallback).
+    summary: string;
 }
 
 // Editor state -> the snapshot arrays stored on a version row.
@@ -92,6 +95,7 @@ export function stateToSnapshot(state: ResumeState): StateSnapshot {
             position: i,
             is_selected: state.selected_skills.includes(category),
         })),
+        summary: state.summary ?? "",
     };
 }
 
@@ -246,6 +250,8 @@ export function overlayVersionOnMaster(
         skills,
         work,
         excluded_bullets,
+        // Version summary overlays the master base; blank falls back to master.
+        summary: snap.summary?.trim() ? snap.summary : master.summary,
     };
 }
 
@@ -267,6 +273,7 @@ export interface TailoringPlanOverlay {
         position: number;
         is_selected?: boolean;
     }[];
+    summary?: string;
 }
 
 // A tailoring plan -> a version snapshot. Titles/dates come from the master
@@ -318,6 +325,7 @@ export function planToSnapshot(
             position: s.position ?? i,
             is_selected: s.is_selected ?? true,
         })),
+        summary: plan.summary?.trim() ? plan.summary : master.summary,
     };
 }
 

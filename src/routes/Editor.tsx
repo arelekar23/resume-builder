@@ -10,9 +10,13 @@ import { loadState, saveState, type ResumeState } from "./../utils/api";
 import {
   getProfile,
   listEducation,
+  getSectionOrder,
+  saveSectionOrder,
+  DEFAULT_SECTION_ORDER,
   EMPTY_PERSONAL_INFO,
   type PersonalInfo,
   type EducationRow,
+  type SectionKey,
 } from "./../utils/profile";
 import {
   listVersions,
@@ -34,8 +38,11 @@ import ApiSettings from "./../components/ApiSettings";
 import ProjectsTab from "./../components/ProjectsTab";
 import ExperienceTab from "./../components/ExperienceTab";
 import SkillsTab from "./../components/SkillsTab";
+import SummaryTab from "./../components/SummaryTab";
+import SectionOrder from "./../components/SectionOrder";
 import VersionBar from "./../components/VersionBar";
 import Onboarding, { ONBOARDING_CUTOFF } from "./../components/Onboarding";
+import Logo from "./../components/Logo";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -73,11 +80,12 @@ import {
   PencilLine,
   ChevronLeft,
   ChevronRight,
+  TextQuote,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 
-type Section = "projects" | "experience" | "skills";
+type Section = "summary" | "projects" | "experience" | "skills";
 
 // Persist active version across reloads (token refresh shouldn't drop to Master).
 const ACTIVE_VERSION_KEY = "resumeBuilder.activeVersionId";
@@ -106,6 +114,10 @@ export default function Editor() {
   // Personal info + education come from the DB (the Profile page edits them).
   const [personal, setPersonal] = useState<PersonalInfo>(EMPTY_PERSONAL_INFO);
   const [education, setEducation] = useState<EducationRow[]>([]);
+  // Summary is per-version content (part of ResumeState); section order is
+  // master-level (shared by all versions).
+  const [summary, setSummary] = useState("");
+  const [sectionOrder, setSectionOrder] = useState<SectionKey[]>(DEFAULT_SECTION_ORDER);
   const [overflowWarning, setOverflowWarning] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -117,6 +129,9 @@ export default function Editor() {
   );
   const activeVersionIdRef = useRef<string | null>(activeVersionId);
   const [versions, setVersions] = useState<ResumeVersion[]>([]);
+  // Mirror of `versions` for reads inside callbacks that fire right after a
+  // refresh (avoids a stale-closure race — see switchTo's company lookup).
+  const versionsRef = useRef<ResumeVersion[]>([]);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const previewPaneRef = useRef<HTMLDivElement>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(null);
@@ -153,6 +168,7 @@ export default function Editor() {
     setWork(state.work);
     setSelectedSkills(state.selected_skills ?? []);
     setExcludedBullets(new Set(state.excluded_bullets ?? []));
+    setSummary(state.summary ?? "");
   }, []);
 
   // Reload the active source. Reads id from a ref to stay stable across changes.
@@ -180,7 +196,9 @@ export default function Editor() {
   }, [applyState]);
 
   const refreshVersions = useCallback(async () => {
-    setVersions(await listVersions());
+    const list = await listVersions();
+    versionsRef.current = list;
+    setVersions(list);
   }, []);
 
   useEffect(() => {
@@ -212,9 +230,14 @@ export default function Editor() {
 
   // Profile-level (shared across versions). Reload on focus to pick up Profile edits.
   const loadProfile = useCallback(async () => {
-    const [info, edu] = await Promise.all([getProfile(), listEducation()]);
+    const [info, edu, order] = await Promise.all([
+      getProfile(),
+      listEducation(),
+      getSectionOrder(),
+    ]);
     setPersonal(info);
     setEducation(edu);
+    setSectionOrder(order);
   }, []);
 
   useEffect(() => {
@@ -231,7 +254,9 @@ export default function Editor() {
       // Ignore pre-layout / hidden reads — otherwise the fit locks to the floor.
       if (w < 50) return;
       const avail = w - 24;
-      setPreviewScale(Math.max(0.5, Math.min(1, avail / PAGE_W)));
+      // Fill the available width (up to 200%) so collapsing side panels actually
+      // enlarges the preview instead of leaving dead space around a 100% page.
+      setPreviewScale(Math.max(0.5, Math.min(2, avail / PAGE_W)));
     };
     update();
     const ro = new ResizeObserver(update);
@@ -247,8 +272,9 @@ export default function Editor() {
       projects,
       skills,
       work,
+      summary,
     }),
-    [selectedProjects, selectedSkills, excludedBullets, projects, skills, work],
+    [selectedProjects, selectedSkills, excludedBullets, projects, skills, work, summary],
   );
 
   // Save to the active source only (Master tables, diff-based; or version snapshot).
@@ -313,10 +339,10 @@ export default function Editor() {
       }
       if (state) applyState(state);
       setActiveCompany(
-        id ? versions.find((x) => x.id === id)?.company_name ?? null : null,
+        id ? versionsRef.current.find((x) => x.id === id)?.company_name ?? null : null,
       );
     },
-    [flushSave, applyState, versions],
+    [flushSave, applyState],
   );
 
   const handleSaveNewVersion = useCallback(
@@ -468,6 +494,8 @@ export default function Editor() {
     excludedBullets,
     personal,
     education,
+    summary,
+    sectionOrder,
   );
 
   const checkOverflow = useCallback(() => {
@@ -598,6 +626,14 @@ export default function Editor() {
       return Object.fromEntries(entries);
     });
   }
+  // Section order is master-level; persist immediately on each drag.
+  function reorderSections(oldIndex: number, newIndex: number) {
+    const next = [...sectionOrder];
+    const [moved] = next.splice(oldIndex, 1);
+    next.splice(newIndex, 0, moved);
+    setSectionOrder(next);
+    void saveSectionOrder(next);
+  }
 
   if (!loaded) {
     return (
@@ -608,6 +644,7 @@ export default function Editor() {
   }
 
   const SECTIONS: { key: Section; label: string; icon: React.ReactNode }[] = [
+    { key: "summary", label: "Summary", icon: <TextQuote /> },
     { key: "skills", label: "Skills", icon: <Wrench /> },
     { key: "experience", label: "Experience", icon: <Briefcase /> },
     { key: "projects", label: "Projects", icon: <FolderGit2 /> },
@@ -651,6 +688,8 @@ export default function Editor() {
       <div className="px-1 text-[11px] text-muted-foreground">
         {`PDF: ${namePrefix(personal.full_name)}_Resume_${sanitizeCompany(activeCompany)}.pdf`}
       </div>
+      <Separator />
+      <SectionOrder order={sectionOrder} onReorder={reorderSections} />
     </>
   );
 
@@ -687,8 +726,8 @@ export default function Editor() {
             <PanelLeft className={cn(leftOpen && "text-primary")} />
           </Button>
           <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
-            <Sparkles className="size-4 shrink-0 text-primary" />
-            <span className="truncate">Resume Builder</span>
+            <Logo className="size-5 shrink-0" />
+            <span className="truncate">AI Resume Builder</span>
           </div>
         </div>
         <div className="flex items-center gap-1 sm:gap-2">
@@ -745,15 +784,53 @@ export default function Editor() {
       </header>
 
       <main className="flex min-h-0 flex-1">
-        {/* Left sidebar — desktop only, collapsible */}
+        {/* Left sidebar — desktop only, collapsible. z-10 lifts the grip above
+            the center pane (this aside is before it in the DOM). */}
         <aside
           className={cn(
-            "hidden shrink-0 flex-col gap-4 overflow-y-auto border-r border-border p-3",
+            "relative z-10 hidden shrink-0 flex-col border-r border-border",
             leftOpen ? "lg:flex lg:w-64" : "lg:hidden",
           )}
         >
-          {resumePanel}
+          {/* Floating grip on the divider — collapse the sidebar (desktop). */}
+          {leftOpen && (
+            <button
+              onClick={() => setLeftOpen(false)}
+              title="Collapse sidebar"
+              aria-label="Collapse resume & versions sidebar"
+              className="absolute -right-3 top-1/2 z-10 hidden h-16 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:border-primary hover:bg-muted hover:text-foreground lg:flex"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+          )}
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-3">
+            {resumePanel}
+          </div>
         </aside>
+
+        {/* Collapsed sidebar — clickable rail with a matching grip (desktop). */}
+        {!leftOpen && (
+          <div className="relative z-10 hidden shrink-0 border-r border-border lg:flex">
+            <button
+              onClick={() => setLeftOpen(true)}
+              title="Show resume & versions"
+              aria-label="Expand resume & versions sidebar"
+              className="absolute -right-3 top-1/2 z-10 flex h-16 w-6 -translate-y-1/2 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-md transition-colors hover:border-primary hover:bg-muted hover:text-foreground"
+            >
+              <ChevronRight className="size-4" />
+            </button>
+            <button
+              onClick={() => setLeftOpen(true)}
+              title="Show resume & versions"
+              className="flex w-11 flex-col items-center gap-2 py-4 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <PanelLeft className="size-4 text-primary" />
+              <span className="text-xs font-medium tracking-wide [writing-mode:vertical-rl]">
+                Resume &amp; versions
+              </span>
+            </button>
+          </div>
+        )}
 
         {/* Center: edit + preview — grouped on desktop, split into
             separate mobile views via `display: contents`. */}
@@ -766,8 +843,12 @@ export default function Editor() {
             "lg:flex lg:w-[44%] lg:min-w-[340px] lg:flex-none lg:border-r",
           )}
         >
-          <div className="flex h-12 shrink-0 items-center border-b border-border px-4">
-            <Tabs value={section} onValueChange={(v) => setSection(v as Section)}>
+          <div className="flex h-12 shrink-0 items-center overflow-x-auto border-b border-border px-2 sm:px-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <Tabs
+              value={section}
+              onValueChange={(v) => setSection(v as Section)}
+              className="shrink-0"
+            >
               <TabsList>
                 {SECTIONS.map((s) => (
                   <TabsTrigger key={s.key} value={s.key}>
@@ -779,6 +860,13 @@ export default function Editor() {
             </Tabs>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {section === "summary" && (
+              <SummaryTab
+                summary={summary}
+                setSummary={setSummary}
+                isVersion={!!activeVersionId}
+              />
+            )}
             {section === "projects" && (
               <ProjectsTab
                 projects={sortedProjects}
@@ -959,6 +1047,7 @@ export default function Editor() {
               <JDAnalysisTab
                 profileId={user?.id ?? ""}
                 onApplyPlan={applyTailoringPlan}
+                includeSummary={sectionOrder.includes("summary")}
               />
             ) : (
               <GuidedTailor
@@ -967,6 +1056,8 @@ export default function Editor() {
                 getCurrentSelection={getCurrentSelection}
                 onApplyTailoredBullets={applyTailoredBullets}
                 getResumeView={getCurrentResumeView}
+                includeSummary={sectionOrder.includes("summary")}
+                onApplySummary={setSummary}
               />
             )}
           </div>

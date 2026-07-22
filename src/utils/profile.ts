@@ -31,6 +31,41 @@ export const EMPTY_PERSONAL_INFO: PersonalInfo = {
     github_url: "",
 };
 
+// Resume sections, in render order. The name/contact header is always first and
+// is not part of this list. Section order is master-level (shared by versions).
+export type SectionKey =
+    | "summary"
+    | "education"
+    | "skills"
+    | "experience"
+    | "projects";
+
+export const DEFAULT_SECTION_ORDER: SectionKey[] = [
+    "summary",
+    "education",
+    "skills",
+    "experience",
+    "projects",
+];
+
+// Coerce a stored value into a complete, deduped, known-key order (missing keys
+// appended in default order; unknown keys dropped). Tolerates old/null rows.
+export function normalizeSectionOrder(raw: unknown): SectionKey[] {
+    const known = new Set<SectionKey>(DEFAULT_SECTION_ORDER);
+    const seen = new Set<SectionKey>();
+    const out: SectionKey[] = [];
+    if (Array.isArray(raw)) {
+        for (const v of raw) {
+            if (typeof v === "string" && known.has(v as SectionKey) && !seen.has(v as SectionKey)) {
+                seen.add(v as SectionKey);
+                out.push(v as SectionKey);
+            }
+        }
+    }
+    for (const k of DEFAULT_SECTION_ORDER) if (!seen.has(k)) out.push(k);
+    return out;
+}
+
 async function getUserId(): Promise<string | null> {
     const {
         data: { user },
@@ -97,6 +132,36 @@ export async function updateProfile(info: PersonalInfo): Promise<SaveResult> {
     if (error) {
         console.error("Failed to save profile:", error);
         return { ok: false, error: `Profile: ${error.message}` };
+    }
+    return { ok: true };
+}
+
+// Master-level resume section order (jsonb on the profiles row).
+export async function getSectionOrder(): Promise<SectionKey[]> {
+    const uid = await getUserId();
+    if (!uid) return [...DEFAULT_SECTION_ORDER];
+    const { data, error } = await supabase
+        .from("profiles")
+        .select("section_order")
+        .eq("id", uid)
+        .maybeSingle();
+    if (error) {
+        console.error("Failed to load section order:", error.message);
+        return [...DEFAULT_SECTION_ORDER];
+    }
+    return normalizeSectionOrder(data?.section_order);
+}
+
+export async function saveSectionOrder(order: SectionKey[]): Promise<SaveResult> {
+    const uid = await getUserId();
+    if (!uid) return { ok: false, error: "Not signed in." };
+    const { error } = await supabase
+        .from("profiles")
+        .update({ section_order: normalizeSectionOrder(order) })
+        .eq("id", uid);
+    if (error) {
+        console.error("Failed to save section order:", error);
+        return { ok: false, error: `Section order: ${error.message}` };
     }
     return { ok: true };
 }
@@ -194,4 +259,29 @@ export async function saveEducation(entries: EducationRow[]): Promise<SaveResult
         return { ok: false, error: `Education: ${failed}` };
     }
     return { ok: true };
+}
+
+// Permanently delete the account: profile row (cascades to resume data, saved
+// versions, and the encrypted LLM key) plus the auth user. Server verifies the
+// caller's JWT; the body is never trusted for identity.
+export async function deleteAccount(): Promise<SaveResult> {
+    const {
+        data: { session },
+    } = await supabase.auth.getSession();
+    if (!session) {
+        return { ok: false, error: "Your session has expired. Please sign in again." };
+    }
+    const res = await fetch("/api/account", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${session.access_token}` },
+    });
+    if (res.status === 204) return { ok: true };
+    let error = `Request failed (${res.status})`;
+    try {
+        const j = await res.json();
+        if (j?.error) error = typeof j.error === "string" ? j.error : JSON.stringify(j.error);
+    } catch {
+        /* non-JSON error body */
+    }
+    return { ok: false, error };
 }
