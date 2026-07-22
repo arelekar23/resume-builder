@@ -76,6 +76,8 @@ export interface TailoringPlan {
     // 0-100 fit of the untailored master (the "before" number)
     baselineScore?: number;
     baselineScoreBreakdown?: string[];
+    // JD-tailored professional summary (empty when the resume has no summary section)
+    summary?: string;
 }
 
 export interface UsageEntry {
@@ -576,6 +578,8 @@ const GraphState = Annotation.Root({
     masterResume: Annotation<MasterResume>(),
     guidance: Annotation<Guidance>(),
     llm: Annotation<ResolvedLLM>(),
+    // when true, the Content Writer also produces a JD-tailored summary
+    hasSummary: Annotation<boolean>(),
 
     // per-agent outputs
     filterResult: Annotation<{ flagged: boolean; reason?: string } | undefined>(),
@@ -589,6 +593,11 @@ const GraphState = Annotation.Root({
     tailoredText: Annotation<Record<string, string>>({
         reducer: (prev, next) => ({ ...prev, ...next }),
         default: () => ({}),
+    }),
+    // JD-tailored summary text (overwrites on rewrite; "" when not requested)
+    tailoredSummary: Annotation<string>({
+        reducer: (_prev, next) => next,
+        default: () => "",
     }),
     editorFeedback: Annotation<string[]>({
         reducer: (_prev, next) => next,
@@ -844,6 +853,7 @@ const contentWriterPrompt = (
     keywords: string[],
     bulletsToWrite: { ref: string; master: string }[],
     feedback: string[],
+    hasSummary: boolean,
 ) =>
     "ROLE: Content Writer Agent.\n" +
     "TASK: Rewrite each included bullet's text for JD alignment, applying " +
@@ -854,7 +864,18 @@ const contentWriterPrompt = (
     "each bullet <= 200 characters; NEVER use em dashes. Bold metrics and " +
     "credentials always, plus 1-2 JD-priority anchors; ~7-9 bold spots total " +
     "across the whole resume; never bold commodity terms or full sentences.\n" +
-    'OUTPUT: JSON only: {"bullets": [{"ref": string, "text": string}]}. ' +
+    (hasSummary
+        ? "ALSO write a professional summary tailored to the JD: 2-3 sentences, " +
+          "impersonal resume voice (e.g. 'Full-stack engineer with 5 years...'; " +
+          "no 'I'/'my'), plain text with NO <b> tags and NO em dashes. Be honest: " +
+          "NEVER invent facts, skills, titles, or metrics not supported by the " +
+          "master resume; frame the candidate's real experience toward the JD and " +
+          "weave in JD-relevant keywords only where plausibly true.\n"
+        : "") +
+    'OUTPUT: JSON only: ' +
+    (hasSummary
+        ? '{"bullets": [{"ref": string, "text": string}], "summary": string}. '
+        : '{"bullets": [{"ref": string, "text": string}]}. ') +
     "Include every ref listed below, using the EXACT ref token.\n\n" +
     (feedback.length > 0
         ? "# Editor feedback to address (this is a rewrite)\n\n" +
@@ -1121,6 +1142,7 @@ async function contentWriterNode(state: State): Promise<Partial<State>> {
     );
     const { data, usage } = await callAgent<{
         bullets: { ref?: string; id?: string; text: string }[];
+        summary?: string;
     }>(
         "contentwriter",
         state.guidance,
@@ -1130,6 +1152,7 @@ async function contentWriterNode(state: State): Promise<Partial<State>> {
             state.keywords,
             bulletsToWrite,
             state.editorFeedback,
+            !!state.hasSummary,
         ),
         16384,
         state.llm,
@@ -1139,6 +1162,7 @@ async function contentWriterNode(state: State): Promise<Partial<State>> {
 
     return {
         tailoredText: tailored,
+        tailoredSummary: (data.summary ?? "").trim(),
         iterations: state.iterations + 1,
         usage: [usage],
     };
@@ -1251,6 +1275,7 @@ function buildResult(final: State): RunResult {
         scoreBreakdown: final.scoreBreakdown,
         baselineScore: final.baselineScore,
         baselineScoreBreakdown: final.baselineScoreBreakdown,
+        summary: final.hasSummary ? final.tailoredSummary ?? "" : "",
     };
 
     return { plan, usage: final.usage };
@@ -1261,21 +1286,33 @@ export async function runTailoringGraph(input: {
     masterResume: MasterResume;
     guidance: Guidance;
     llm: ResolvedLLM;
+    hasSummary?: boolean;
 }): Promise<RunResult> {
-    return buildResult((await workflow.invoke(input)) as State);
+    return buildResult(
+        (await workflow.invoke({ ...input, hasSummary: !!input.hasSummary })) as State,
+    );
 }
 
 // like runTailoringGraph but calls onProgress(nodeKey) as each node finishes.
 // "updates" chunks name the node that just ran; "values" chunks carry the full
 // accumulated state (the last is final).
 export async function runTailoringGraphStreaming(
-    input: { jdText: string; masterResume: MasterResume; guidance: Guidance; llm: ResolvedLLM },
+    input: {
+        jdText: string;
+        masterResume: MasterResume;
+        guidance: Guidance;
+        llm: ResolvedLLM;
+        hasSummary?: boolean;
+    },
     onProgress: (nodeKey: string) => void,
 ): Promise<RunResult> {
     let final: State | undefined;
-    const stream = await workflow.stream(input, {
-        streamMode: ["updates", "values"],
-    });
+    const stream = await workflow.stream(
+        { ...input, hasSummary: !!input.hasSummary },
+        {
+            streamMode: ["updates", "values"],
+        },
+    );
     for await (const part of stream as AsyncIterable<[string, unknown]>) {
         const [mode, chunk] = part;
         if (mode === "updates") {
@@ -1359,14 +1396,16 @@ export interface TailorResult {
     scoreBreakdown?: string[];
     editorNotes?: string[];
     approved?: boolean;
+    summary?: string;
     usage: UsageEntry[];
 }
 
 // Phase 2: ATS -> Content Writer -> Editor; tailors + scores the phase-1 selection
 export async function runTailorPhase(
-    input: PhaseInput & { selection: Selection },
+    input: PhaseInput & { selection: Selection; hasSummary?: boolean },
 ): Promise<TailorResult> {
     const { jdText, masterResume: m, guidance: g, selection, llm } = input;
+    const hasSummary = !!input.hasSummary;
     const usage: UsageEntry[] = [];
 
     const ats = await callAgent<{ keywords: string[] }>(
@@ -1374,11 +1413,14 @@ export async function runTailorPhase(
     usage.push(ats.usage);
 
     const bulletsToWrite = bulletsToWriteFor(m, selection.includedBulletIds);
-    const cw = await callAgent<{ bullets: { ref?: string; id?: string; text: string }[] }>(
+    const cw = await callAgent<{
+        bullets: { ref?: string; id?: string; text: string }[];
+        summary?: string;
+    }>(
         "contentwriter",
         g,
         m,
-        contentWriterPrompt(jdText, ats.data.keywords ?? [], bulletsToWrite, []),
+        contentWriterPrompt(jdText, ats.data.keywords ?? [], bulletsToWrite, [], hasSummary),
         16384,
         llm,
     );
@@ -1404,6 +1446,7 @@ export async function runTailorPhase(
         scoreBreakdown: ed.data.scoreBreakdown,
         editorNotes: ed.data.notes,
         approved: ed.data.approved,
+        summary: hasSummary ? (cw.data.summary ?? "").trim() : "",
         usage,
     };
 }

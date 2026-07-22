@@ -24,6 +24,7 @@ import {
 } from "../utils/keyVault";
 import { supabase } from "../lib/supabase";
 import ResumeUpload from "./ResumeUpload";
+import Logo from "./Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -92,8 +93,8 @@ export default function Onboarding({
       {/* Top bar */}
       <div className="relative flex shrink-0 items-center justify-between px-5 py-4">
         <div className="flex items-center gap-2 text-sm font-semibold">
-          <Sparkles className="size-4 text-primary" />
-          Resume Builder
+          <Logo className="size-5" />
+          AI Resume Builder
         </div>
         <button
           type="button"
@@ -255,6 +256,9 @@ const WELCOME_POINTS = [
 function WelcomeStep({ email }: { email?: string }) {
   return (
     <div>
+      <div className="mb-4 flex size-12 items-center justify-center rounded-xl border border-border bg-background">
+        <Logo className="size-7" />
+      </div>
       <div className="mb-1 inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
         <Sparkles className="size-3.5" />
         Welcome{email ? `, ${email.split("@")[0]}` : ""}

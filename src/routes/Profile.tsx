@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, Plus, Trash2, LogOut } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, LogOut, AlertTriangle, Loader2 } from "lucide-react";
 
 import ResumeUpload from "@/components/ResumeUpload";
 
@@ -10,6 +10,7 @@ import {
   updateProfile,
   listEducation,
   saveEducation,
+  deleteAccount,
   EMPTY_PERSONAL_INFO,
   type PersonalInfo,
   type EducationRow,
@@ -25,6 +26,14 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogFooter,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 type SaveState = "idle" | "saving" | "saved" | "error";
 
@@ -67,6 +76,10 @@ export default function Profile() {
   const [loading, setLoading] = useState(true);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [saveError, setSaveError] = useState<string>("");
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [confirmText, setConfirmText] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
 
   const loadAll = useCallback(async () => {
     const [info, edu] = await Promise.all([getProfile(), listEducation()]);
@@ -115,6 +128,19 @@ export default function Profile() {
     } else {
       setSaveError(profileRes.error || eduRes.error || "Unknown error.");
       setSaveState("error");
+    }
+  }
+
+  async function handleDeleteAccount() {
+    setDeleting(true);
+    setDeleteError("");
+    const res = await deleteAccount();
+    if (res.ok) {
+      // Session is gone; signing out flips ProtectedRoute back to /login.
+      await signOut();
+    } else {
+      setDeleteError(res.error || "Failed to delete account.");
+      setDeleting(false);
     }
   }
 
@@ -290,7 +316,88 @@ export default function Profile() {
             </div>
           </>
         )}
+
+        <Card className="border-destructive/30">
+          <CardHeader>
+            <CardTitle className="text-destructive">Danger zone</CardTitle>
+            <CardDescription>
+              Permanently delete your account and everything in it — profile,
+              experience, projects, skills, all saved versions, and your stored
+              API key. This cannot be undone.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                setDeleteError("");
+                setConfirmText("");
+                setDeleteOpen(true);
+              }}
+            >
+              <Trash2 />
+              Delete account
+            </Button>
+          </CardContent>
+        </Card>
       </main>
+
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(o) => {
+          if (!deleting) setDeleteOpen(o);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="size-4" />
+              Delete account
+            </DialogTitle>
+            <DialogDescription>
+              This permanently deletes your account and all associated data —
+              profile, resume content, every saved version, and your encrypted
+              API key. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="confirm-delete">
+              Type <span className="font-semibold text-foreground">DELETE</span>{" "}
+              to confirm
+            </Label>
+            <Input
+              id="confirm-delete"
+              value={confirmText}
+              onChange={(e) => setConfirmText(e.target.value)}
+              placeholder="DELETE"
+              autoComplete="off"
+              autoFocus
+            />
+            {deleteError && (
+              <p className="text-sm text-destructive">{deleteError}</p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              size="lg"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="lg"
+              onClick={handleDeleteAccount}
+              disabled={deleting || confirmText.trim() !== "DELETE"}
+            >
+              {deleting && <Loader2 className="animate-spin" />}
+              Delete my account
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

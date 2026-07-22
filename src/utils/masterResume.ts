@@ -20,6 +20,7 @@ export interface ParsedResume {
     work: { title: string; date: string; bullets: string[] }[];
     projects: { title: string; date: string; bullets: string[] }[];
     skills: { category: string; items: string }[];
+    summary: string;
 }
 
 async function getUserId(): Promise<string | null> {
@@ -148,6 +149,12 @@ export async function overwriteMasterResume(parsed: ParsedResume): Promise<SaveR
         github_url: clean(p.github_url) || existing.github_url,
     });
     if (!profileRes.ok) return profileRes;
+
+    // Summary lives on the profiles row (master base); only overwrite when found.
+    const summary = clean(parsed.summary);
+    if (summary) {
+        await supabase.from("profiles").update({ summary }).eq("id", uid);
+    }
 
     return { ok: true };
 }

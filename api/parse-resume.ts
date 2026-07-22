@@ -26,6 +26,7 @@ export interface ParsedResume {
     work: { title: string; date: string; bullets: string[] }[];
     projects: { title: string; date: string; bullets: string[] }[];
     skills: { category: string; items: string }[];
+    summary: string;
 }
 
 const SYSTEM =
@@ -38,19 +39,26 @@ const INSTRUCTION =
     "Extract the resume text below into JSON with EXACTLY this shape:\n" +
     "{\n" +
     '  "profile": { "full_name": string, "email": string, "phone": string, "location": string, "linkedin_url": string, "github_url": string },\n' +
+    '  "summary": string,\n' +
     '  "education": [{ "school": string, "degree": string, "details": string, "date": string }],\n' +
     '  "work": [{ "title": string, "date": string, "bullets": string[] }],\n' +
     '  "projects": [{ "title": string, "date": string, "bullets": string[] }],\n' +
     '  "skills": [{ "category": string, "items": string }]\n' +
     "}\n" +
     "Rules:\n" +
+    "- summary: the professional summary / objective / profile section VERBATIM if " +
+    "the resume has one (the prose blurb near the top, not the skills list); else " +
+    'empty string "". Never fabricate one.\n' +
     "- profile.full_name: the person's name from the header. location: city/state.\n" +
     "- linkedin_url / github_url: the full URL if present, else empty string.\n" +
     "- education.degree: degree + field + GPA if shown (e.g. 'Master of Science, " +
     "Computer Science, 3.8/4.0'). details: relevant courses/honors, else empty.\n" +
     "- work.title: combine role and company (e.g. 'Software Engineer, Acme'). " +
     "date: the range exactly as written (e.g. 'Jan 2024 - Present').\n" +
-    "- projects.title: the project name. date: any date shown, else empty.\n" +
+    "- projects.title: the project name EXACTLY as written, INCLUDING any tech " +
+    "stack / tools shown in parentheses or after the name (e.g. 'AI Resume " +
+    "Builder (React, TypeScript, LangGraph.js, Supabase)'). NEVER drop the " +
+    "parenthetical technologies. date: any date shown, else empty.\n" +
     "- bullets: each bullet as a separate string, verbatim, WITHOUT the leading " +
     "bullet character. Preserve wording.\n" +
     "- skills: group by the resume's own categories (e.g. 'Languages', " +
