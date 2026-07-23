@@ -127,7 +127,7 @@ export default function VersionBar({
         </DropdownMenuTrigger>
         <DropdownMenuContent
           align="start"
-          className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-[16rem]"
+          className="max-h-[var(--radix-dropdown-menu-content-available-height)] w-[var(--radix-dropdown-menu-trigger-width)] min-w-[16rem] overflow-y-auto"
         >
           {/* Master */}
           <DropdownMenuItem
