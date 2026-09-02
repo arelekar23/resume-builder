@@ -435,6 +435,12 @@ async function callAgent<T>(
         );
 }
 
+// Opus 5 / Sonnet 5 and later run adaptive thinking by default, and reasoning
+// tokens are drawn from max_tokens — a 1k cap leaves nothing for the JSON. Give
+// every agent enough headroom that the answer still lands; max_tokens is a cap,
+// not a spend, so non-thinking models are unaffected.
+const ANTHROPIC_MIN_MAX_TOKENS = 8192;
+
 export async function callAnthropic<T>(
     agent: string,
     model: string,
@@ -462,10 +468,12 @@ export async function callAnthropic<T>(
             "x-api-key": apiKey,
             "anthropic-version": "2023-06-01",
         },
+        // no temperature/top_p/top_k: sampling params are rejected with a 400 on
+        // Opus 4.7+, Opus 5, Sonnet 5 and Fable 5. Determinism comes from the
+        // prompts, not the knob.
         body: JSON.stringify({
             model,
-            max_tokens: maxTokens,
-            temperature: 0, // deterministic across runs on the same JD
+            max_tokens: Math.max(maxTokens, ANTHROPIC_MIN_MAX_TOKENS),
             system,
             messages: [{ role: "user", content: userPrompt }],
         }),
@@ -476,6 +484,7 @@ export async function callAnthropic<T>(
     }
     const body = JSON.parse(text) as {
         content: { type: string; text?: string }[];
+        stop_reason?: string;
         usage?: {
             input_tokens: number;
             output_tokens: number;
@@ -484,6 +493,13 @@ export async function callAnthropic<T>(
         };
     };
     const raw = body.content.find((b) => b.type === "text")?.text ?? "";
+    // thinking spent the whole budget before any answer — surface that rather
+    // than letting it fall through as "invalid JSON" on an empty string
+    if (!raw.trim() && body.stop_reason === "max_tokens") {
+        throw new Error(
+            `[${agent}] ${model} used its entire token budget on reasoning and returned no answer. Try a model with lighter reasoning.`,
+        );
+    }
     return {
         data: parseAgentJson<T>(agent, raw),
         usage: {
