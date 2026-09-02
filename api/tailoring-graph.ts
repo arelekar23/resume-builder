@@ -307,14 +307,20 @@ function minimalBlocks(
     return blocks;
 }
 
-// retry 429 and 5xx with backoff, honoring Retry-After; capped to the
-// serverless time budget
+// one rate-limited call must not consume the whole function budget: agents run
+// sequentially inside a single 60s maxDuration, and 3 retries honoring a 15s
+// Retry-After could sleep 45s and starve every agent downstream. Stop retrying
+// once the accumulated sleep would cross this, and let the caller see the error.
+const MAX_TOTAL_RETRY_SLEEP_MS = 8000;
+
+// retry 429 and 5xx with backoff, honoring Retry-After, within the sleep budget
 export async function fetchWithRetry(
     url: string,
     init: RequestInit,
     maxRetries = 3,
 ): Promise<Response> {
     let attempt = 0;
+    let sleptMs = 0;
     for (; ;) {
         const res = await fetch(url, init);
         if (res.status !== 429 && res.status < 500) return res;
@@ -324,7 +330,9 @@ export async function fetchWithRetry(
             Number.isFinite(ra) && ra > 0
                 ? Math.min(ra * 1000, 15000)
                 : Math.min(1000 * 2 ** attempt, 8000);
+        if (sleptMs + waitMs > MAX_TOTAL_RETRY_SLEEP_MS) return res;
         attempt++;
+        sleptMs += waitMs;
         await new Promise((r) => setTimeout(r, waitMs));
     }
 }
