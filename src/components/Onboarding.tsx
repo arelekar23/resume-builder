@@ -412,7 +412,7 @@ function ConnectStep({
             value={model}
             onChange={(e) => setModel(e.target.value)}
             placeholder={
-              provider === "anthropic" ? "claude-sonnet-4-6" : "llama-3.3-70b"
+              provider === "anthropic" ? "claude-opus-5" : "llama-3.3-70b"
             }
           />
         </div>
