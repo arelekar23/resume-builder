@@ -68,6 +68,12 @@ interface TailoringPlan {
   notes?: string[];
   editorNotes?: string[];
   iterations?: number;
+  stopReason?:
+    | "score-cleared"
+    | "iteration-cap"
+    | "plateau"
+    | "time-budget"
+    | "editor-error";
   score?: number;
   scoreBreakdown?: string[];
   baselineScore?: number;
@@ -92,6 +98,19 @@ const VERDICT: Record<
   apply: { label: "APPLY", variant: "success" },
   "stretch-apply": { label: "STRETCH", variant: "warning" },
   skip: { label: "SKIP", variant: "destructive" },
+};
+
+// The loop ends for reasons other than "good enough" — say which, so a score
+// below the bar doesn't read as a finished, approved draft.
+const STOP_REASON_NOTE: Record<string, string> = {
+  "iteration-cap":
+    "Stopped after the maximum number of rewrite passes without reaching the target score. Editing by hand, or switching to Guided mode, will do better than re-running.",
+  plateau:
+    "Stopped because the last rewrite did not improve the score. Further passes were unlikely to help.",
+  "time-budget":
+    "Stopped early to stay inside the request time limit. Re-running may get further, or use Guided mode to tailor in smaller steps.",
+  "editor-error":
+    "The final QA pass failed, so this draft was not reviewed. The bullets are still usable, but the score is from an earlier pass.",
 };
 
 function scoreColor(n: number) {
@@ -439,6 +458,11 @@ export default function JDAnalysisTab({
                 )}
                 {typeof plan.score === "number" && (
                   <ScoreRow label="Tailored to this JD" score={plan.score} />
+                )}
+                {plan.stopReason && plan.stopReason !== "score-cleared" && (
+                  <div className="mt-2 rounded-md bg-muted px-2 py-1.5 text-xs text-muted-foreground">
+                    {STOP_REASON_NOTE[plan.stopReason]}
+                  </div>
                 )}
                 {plan.scoreBreakdown && plan.scoreBreakdown.length > 0 && (
                   <ul className="mt-2 flex flex-col gap-0.5 text-xs text-muted-foreground">

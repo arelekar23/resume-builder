@@ -6,7 +6,6 @@ import { tailoringPrinciples } from "./guidance-files.js";
 import {
     runTailoringGraph,
     runTailoringGraphStreaming,
-    runScreenPhase,
     runTailorPhase,
     runCreatePhase,
     runAtsPhase,
@@ -175,14 +174,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const result = await runCreatePhase({ jdText, masterResume, guidance, llm });
             return res.status(200).json(result);
         }
-        if (phase === "screen") {
-            const result = await runScreenPhase({ jdText, masterResume, guidance, llm });
-            return res.status(200).json(result);
-        }
         if (phase === "tailor") {
             const selection = req.body?.selection as Selection | undefined;
             if (!selection) {
                 return res.status(400).json({ error: "selection is required for the tailor phase" });
+            }
+            // The text the user currently sees, so a hand edit (or the active
+            // version's text) is what gets rewritten rather than master.
+            const rawCurrent = req.body?.currentText;
+            const currentText: Record<string, string> = {};
+            if (rawCurrent && typeof rawCurrent === "object" && !Array.isArray(rawCurrent)) {
+                for (const [id, text] of Object.entries(rawCurrent)) {
+                    if (typeof text === "string" && text.trim()) currentText[id] = text;
+                }
             }
             const result = await runTailorPhase({
                 jdText,
@@ -191,6 +195,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 selection,
                 llm,
                 hasSummary: includeSummary,
+                currentText,
             });
             return res.status(200).json(result);
         }
@@ -204,7 +209,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
             try {
                 const { plan, usage } = await runTailoringGraphStreaming(
-                    { jdText, masterResume, guidance, llm, hasSummary: includeSummary },
+                    {
+                        jdText,
+                        masterResume,
+                        guidance,
+                        llm,
+                        hasSummary: includeSummary,
+                        deadlineAt: graphDeadline(),
+                    },
                     (node) => send("progress", { node }),
                 );
                 send("result", { plan, usage });
@@ -221,6 +233,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             guidance,
             llm,
             hasSummary: includeSummary,
+            deadlineAt: graphDeadline(),
         });
         return res.status(200).json({ plan, usage });
     } catch (err) {
@@ -231,3 +244,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 export const config = {
     maxDuration: 60,
 };
+
+// Keep in sync with config.maxDuration above (Vercel parses that literal, so it
+// can't reference this). Raising both to 300 requires a Pro plan.
+const MAX_DURATION_S = 60;
+// Headroom for assembling the plan and flushing the response after the graph
+// returns. The graph stops looping once a further pass wouldn't fit.
+const RESPONSE_HEADROOM_MS = 8000;
+
+function graphDeadline(): number {
+    return Date.now() + MAX_DURATION_S * 1000 - RESPONSE_HEADROOM_MS;
+}

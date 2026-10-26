@@ -48,6 +48,7 @@ interface GuidedTailorProps {
   profileId: string;
   onApplyScreenPlan: (plan: unknown) => Promise<void>;
   getCurrentSelection: () => unknown;
+  getCurrentBulletText: () => Record<string, string>;
   onApplyTailoredBullets: (bullets: { id: string; text: string }[]) => void;
   getResumeView: () => unknown;
   includeSummary?: boolean;
@@ -173,6 +174,7 @@ export default function GuidedTailor({
   profileId,
   onApplyScreenPlan,
   getCurrentSelection,
+  getCurrentBulletText,
   onApplyTailoredBullets,
   getResumeView,
   includeSummary,
@@ -292,6 +294,7 @@ export default function GuidedTailor({
         jdText: jd(),
         profileId,
         selection: getCurrentSelection(),
+        currentText: getCurrentBulletText(),
         includeSummary: !!includeSummary,
       });
       const bullets = [
