@@ -411,6 +411,17 @@ export default function Editor() {
     };
   }, [currentResumeState]);
 
+  // Guided mode: bullet id -> the text currently on screen. Sent with the
+  // tailor phase so the Content Writer rewrites the user's hand edits (and the
+  // active version's text) instead of silently reverting to master.
+  const getCurrentBulletText = useCallback(() => {
+    const st = currentResumeState();
+    const out: Record<string, string> = {};
+    for (const p of st.projects) for (const b of p.bullets) out[b.id] = b.text;
+    for (const w of st.work) for (const b of w.bullets) out[b.id] = b.text;
+    return out;
+  }, [currentResumeState]);
+
   // Guided mode: resume as ATS/reviewers see it (selected only, HTML stripped).
   const getCurrentResumeView = useCallback(() => {
     const st = currentResumeState();
@@ -1054,6 +1065,7 @@ export default function Editor() {
                 profileId={user?.id ?? ""}
                 onApplyScreenPlan={applyTailoringPlan}
                 getCurrentSelection={getCurrentSelection}
+                getCurrentBulletText={getCurrentBulletText}
                 onApplyTailoredBullets={applyTailoredBullets}
                 getResumeView={getCurrentResumeView}
                 includeSummary={sectionOrder.includes("summary")}

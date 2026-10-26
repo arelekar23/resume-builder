@@ -71,6 +71,9 @@ export interface TailoringPlan {
     notes?: string[];
     editorNotes?: string[];
     iterations?: number;
+    // why the editor loop ended. Anything other than "score-cleared" means the
+    // draft never met the bar, so the UI can say so instead of implying success.
+    stopReason?: StopReason;
     score?: number; // 0-100 fit of the tailored resume to the JD
     scoreBreakdown?: string[];
     // 0-100 fit of the untailored master (the "before" number)
@@ -126,6 +129,15 @@ function modelFor(_agent: string, llm: ResolvedLLM): string {
 
 const MAX_EDITOR_ITERATIONS = 3;
 const SCORE_THRESHOLD = 80;
+
+// Why the editor loop stopped. Only "score-cleared" means the draft actually
+// met the bar; the rest are give-up conditions worth surfacing.
+export type StopReason =
+    | "score-cleared"
+    | "iteration-cap"
+    | "plateau"
+    | "time-budget"
+    | "editor-error";
 
 // Shared context prefix, identical across every agent in a run. Per-agent
 // instructions stay in the user message so this prefix stays cacheable.
@@ -248,7 +260,12 @@ function tailoredFromBullets(
     for (const b of bullets ?? []) {
         const key = b.ref ?? b.id;
         const uuid = key ? refMap.get(key) ?? (idSet.has(key) ? key : undefined) : undefined;
-        if (uuid) tailored[uuid] = b.text;
+        if (!uuid) continue;
+        // A blank rewrite is never a meaningful edit — it's a thin or truncated
+        // model response. Drop it here so no downstream fallback has to guess,
+        // and the bullet keeps its existing text.
+        if (typeof b.text !== "string" || !b.text.trim()) continue;
+        tailored[uuid] = b.text;
     }
     return tailored;
 }
@@ -270,7 +287,8 @@ const AGENT_CONTEXT: Record<
     { guidance: (keyof Guidance)[]; master: boolean }
 > = {
     filter: { guidance: [], master: false },
-    recruiter: { guidance: [], master: false },
+    // fit read needs the candidate, not just the JD
+    recruiter: { guidance: [], master: true },
     hiringmanager: { guidance: ["tailoringPrinciples"], master: true },
     baseline: { guidance: ["tailoringPrinciples"], master: false },
     ats: { guidance: [], master: false },
@@ -604,6 +622,13 @@ const GraphState = Annotation.Root({
     llm: Annotation<ResolvedLLM>(),
     // when true, the Content Writer also produces a JD-tailored summary
     hasSummary: Annotation<boolean>(),
+    // absolute epoch ms by which the run must be finished. The editor loop
+    // stops early rather than letting the serverless function get killed
+    // mid-stream (which would drop the result entirely). 0 = no limit.
+    deadlineAt: Annotation<number>({
+        reducer: (_prev, next) => next,
+        default: () => 0,
+    }),
 
     // per-agent outputs
     filterResult: Annotation<{ flagged: boolean; reason?: string } | undefined>(),
@@ -623,19 +648,21 @@ const GraphState = Annotation.Root({
         reducer: (_prev, next) => next,
         default: () => "",
     }),
+    // structural feedback (selection / ordering / page-fit) -> Hiring Manager
     editorFeedback: Annotation<string[]>({
         reducer: (_prev, next) => next,
         default: () => [],
+    }),
+    // per-bullet rewrite instructions, bullet UUID -> issue, -> Content Writer
+    editorBulletIssues: Annotation<Record<string, string>>({
+        reducer: (_prev, next) => next,
+        default: () => ({}),
     }),
     editorNotes: Annotation<string[]>({
         reducer: (_prev, next) => next,
         default: () => [],
     }),
     score: Annotation<number | undefined>({
-        reducer: (_prev, next) => next,
-        default: () => undefined,
-    }),
-    prevScore: Annotation<number | undefined>({
         reducer: (_prev, next) => next,
         default: () => undefined,
     }),
@@ -659,6 +686,22 @@ const GraphState = Annotation.Root({
     iterations: Annotation<number>({
         reducer: (_prev, next) => next,
         default: () => 0,
+    }),
+    // wall-clock bookkeeping for the editor loop's time budget
+    passStartedAt: Annotation<number>({
+        reducer: (_prev, next) => next,
+        default: () => 0,
+    }),
+    lastPassMs: Annotation<number>({
+        reducer: (_prev, next) => next,
+        default: () => 0,
+    }),
+    // why the editor loop stopped, so the UI can tell "good enough" apart from
+    // "gave up". null while the loop should keep going; the editor node sets it
+    // on every pass (never left undefined, so the reducer always overwrites).
+    stopReason: Annotation<StopReason | null>({
+        reducer: (_prev, next) => next,
+        default: () => null,
     }),
 
     // usage accumulates across every node
@@ -690,7 +733,9 @@ function assembleContent(
                 position: orderIndex.get(p.id) ?? 999,
                 bullets: p.bullets.map((b, i) => ({
                     id: b.id,
-                    // || not ?? — empty tailored text must fall back to master
+                    // || not ?? — a blank rewrite must fall back to the source
+                    // text. tailoredFromBullets already drops blanks; this is
+                    // the second line of defence, and work/ below must match.
                     text: tailored[b.id] || b.text,
                     is_excluded: !(is_selected && included.has(b.id)),
                     position: i,
@@ -703,13 +748,23 @@ function assembleContent(
         id: w.id,
         bullets: w.bullets.map((b, i) => ({
             id: b.id,
-            text: tailored[b.id] ?? b.text,
+            // same || as projects above: work bullets got blanked by a ?? here
+            text: tailored[b.id] || b.text,
             is_excluded: !included.has(b.id),
             position: i,
         })),
     }));
 
     return { projects, work, skills: selection.skills };
+}
+
+// Bullets the reader will actually see. The editor scores page-fit against this,
+// so baseline / loop / guided must all count it the same way.
+function countIncluded(content: Pick<TailoringPlan, "projects" | "work">): number {
+    return (
+        (content.projects ?? []).flatMap((p) => p.bullets).filter((b) => !b.is_excluded).length +
+        (content.work ?? []).flatMap((w) => w.bullets).filter((b) => !b.is_excluded).length
+    );
 }
 
 // validate/repair a Hiring Manager selection: drop hallucinated ids, and on an
@@ -811,7 +866,8 @@ const filterPrompt = (jdText: string) =>
 
 const recruiterPrompt = (jdText: string) =>
     "ROLE: Recruiter Agent (the 6-second scan).\n" +
-    "TASK: Give a fast first-impression fit read on the JD. Be honest about " +
+    "TASK: Skim the master resume snapshot against the JD and give a fast " +
+    "first-impression fit read of this candidate for the role. Be honest about " +
     "gaps but lean toward applying (stretches welcome).\n" +
     'OUTPUT: JSON only: {"firstImpression": string (1-2 sentences), ' +
     '"verdict": "apply"|"stretch-apply"|"skip", "workingFor": string[], ' +
@@ -875,7 +931,7 @@ const atsPrompt = (jdText: string, selection: unknown) =>
 const contentWriterPrompt = (
     jdText: string,
     keywords: string[],
-    bulletsToWrite: { ref: string; master: string }[],
+    bulletsToWrite: BulletToWrite[],
     feedback: string[],
     hasSummary: boolean,
 ) =>
@@ -902,12 +958,24 @@ const contentWriterPrompt = (
         : '{"bullets": [{"ref": string, "text": string}]}. ') +
     "Include every ref listed below, using the EXACT ref token.\n\n" +
     (feedback.length > 0
-        ? "# Editor feedback to address (this is a rewrite)\n\n" +
+        ? "# Reviewer feedback on the draft as a whole (selection, ordering, " +
+        "page fit). Per-bullet fixes arrive with their bullet below.\n\n" +
         feedback.map((f) => `- ${f}`).join("\n") +
         "\n\n"
         : "") +
     `# Keywords to emphasize\n\n${JSON.stringify(keywords)}\n\n` +
-    `# Bullets to rewrite (ref -> master text)\n\n${JSON.stringify(bulletsToWrite)}\n\n` +
+    "# Bullets to rewrite\n\n" +
+    "Rewrite ONLY the bullets listed here. Any bullet not listed is already " +
+    "approved and stays exactly as it is.\n" +
+    'Each entry has a "master" text — the candidate\'s real, factual record. ' +
+    'An entry may also carry "current": the text as it stands now, either ' +
+    "because the user hand-edited it or because you wrote it on an earlier " +
+    'pass. When "current" is present, rewrite THAT text — improve it, do not ' +
+    'start over — and use "master" only to check which facts are real. When ' +
+    'there is no "current", rewrite "master".\n' +
+    'An entry may also carry "issue": the reviewer\'s specific complaint about ' +
+    "that bullet. Fix it directly, and do not undo what is already working.\n\n" +
+    `${JSON.stringify(bulletsToWrite)}\n\n` +
     `# Job Description\n\n${jdText}`;
 
 // convert the Writer's <b> tags to markdown ** for reviewers: raw tags made
@@ -917,15 +985,28 @@ function renderBoldAsMarkdown(text: string): string {
     return text.replace(/<\/?b>/gi, "**");
 }
 
+// The draft as the Editor sees it: bold rendered as markdown, and every bullet
+// keyed by its short `ref` instead of a UUID. The Editor doesn't get the master
+// snapshot (AGENT_CONTEXT.editor.master === false), so without this it has no
+// vocabulary to point at a specific bullet and its feedback can only be prose.
+// Excluded bullets are dropped — the Editor scores what renders, not the pool.
 function draftForReview(
+    master: MasterResume,
     content: Pick<TailoringPlan, "projects" | "work" | "skills">,
-): Pick<TailoringPlan, "projects" | "work" | "skills"> {
-    const conv = (
-        bs: { id: string; text: string; is_excluded: boolean; position: number }[],
-    ) => bs.map((b) => ({ ...b, text: renderBoldAsMarkdown(b.text) }));
+): Pick<TailoringPlan, "skills"> & {
+    projects: { bullets: { ref: string; text: string }[] }[];
+    work: { bullets: { ref: string; text: string }[] }[];
+} {
+    const ref = idToRef(master);
+    const conv = (bs: { id: string; text: string; is_excluded: boolean }[]) =>
+        bs
+            .filter((b) => !b.is_excluded)
+            .map((b) => ({ ref: ref.get(b.id) ?? b.id, text: renderBoldAsMarkdown(b.text) }));
     return {
         skills: content.skills,
-        projects: (content.projects ?? []).map((p) => ({ ...p, bullets: conv(p.bullets) })),
+        projects: (content.projects ?? [])
+            .filter((p) => p.is_selected)
+            .map((p) => ({ ...p, bullets: conv(p.bullets) })),
         work: (content.work ?? []).map((w) => ({ ...w, bullets: conv(w.bullets) })),
     };
 }
@@ -967,14 +1048,25 @@ const editorPrompt = (jdText: string, draft: unknown, includedCount: number) =>
     "<= 200 chars.\n" +
     "Set approved=true only if the draft is strong (score >= 80) AND every hard " +
     "constraint passes.\n" +
-    'OUTPUT: JSON only: {"approved": boolean, "issues": string[]  // concrete ' +
-    "rewrite instructions for the Content Writer, most impactful first (empty " +
-    'if approved), "notes": string[]  // brief flags to surface to the user, ' +
+    "Attribute every fix you can to the specific bullet it applies to, using " +
+    "that bullet's `ref` token from the draft below (e.g. w1b2, p3b1). Put " +
+    "those in bulletIssues. Reserve `issues` for problems that are NOT about " +
+    "one bullet's wording — wrong bullets selected, bad ordering, the draft " +
+    "overflowing the page. This matters: bulletIssues are applied surgically to " +
+    "the named bullets, while everything else forces a full regeneration that " +
+    "discards good writing, so be precise and do not restate a bullet fix in " +
+    "`issues`.\n" +
+    'OUTPUT: JSON only: {"approved": boolean, "issues": string[]  // ' +
+    "selection/ordering/page-fit problems only, most impactful first (empty if " +
+    'approved), "bulletIssues": [{"ref": string, "issue": string}]  // ' +
+    "per-bullet rewrite instructions, ref taken from the draft below, " +
+    '"notes": string[]  // brief flags to surface to the user, ' +
     '"score": number  // 0-100, "scoreBreakdown": string[]  // one short line ' +
     'per lens, e.g. "ATS keyword coverage: strong", "Recruiter readability: ok", ' +
     '"HM depth: add scale on the caching bullet"}.\n\n' +
     "# Draft (tailored, exactly as it renders — bold shown as **markdown**, not " +
-    `raw HTML)\n\n${JSON.stringify(draft)}\n\n` +
+    "raw HTML. Each bullet carries the `ref` token to use in bulletIssues.)\n\n" +
+    `${JSON.stringify(draft)}\n\n` +
     `# Job Description\n\n${jdText}`;
 
 // resume view (included/selected content) the ATS + reviewers see
@@ -1044,26 +1136,70 @@ const hiringManagerReviewPrompt = (jdText: string, resumeJson: string, company: 
     '"gaps": string[], "summary": string (1-2 sentences, first person)}.\n\n' +
     `# Resume\n\n${resumeJson}\n\n# Job Description\n\n${jdText}`;
 
-// included bullets (ref -> master text) for the content writer
+interface BulletToWrite {
+    ref: string;
+    master: string;
+    // Present when the text to work from differs from master: a user hand edit,
+    // or the Writer's own previous draft on a rewrite pass. The Writer rewrites
+    // `current`, using `master` as the factual ceiling.
+    current?: string;
+    // The Editor's specific complaint about this bullet, when it named one.
+    issue?: string;
+}
+
+// `source` is the resume the user is actually looking at (master with any hand
+// edits overlaid). `provenance` is the untouched master, used only to tell the
+// Writer which facts are real. They're the same object in the autonomous graph.
 function bulletsToWriteFor(
-    master: MasterResume,
+    source: MasterResume,
     includedBulletIds: string[],
-): { ref: string; master: string }[] {
+    provenance: MasterResume = source,
+    issues: Record<string, string> = {},
+): BulletToWrite[] {
     const included = new Set(includedBulletIds);
-    const ref = idToRef(master);
-    const out: { ref: string; master: string }[] = [];
-    for (const w of master.work)
-        for (const b of w.bullets)
-            if (included.has(b.id)) out.push({ ref: ref.get(b.id) ?? b.id, master: b.text });
-    for (const p of master.projects)
-        for (const b of p.bullets)
-            if (included.has(b.id)) out.push({ ref: ref.get(b.id) ?? b.id, master: b.text });
+    const ref = idToRef(source);
+    const masterById = new Map<string, string>();
+    for (const w of provenance.work) for (const b of w.bullets) masterById.set(b.id, b.text);
+    for (const p of provenance.projects) for (const b of p.bullets) masterById.set(b.id, b.text);
+
+    const out: BulletToWrite[] = [];
+    const push = (b: { id: string; text: string }) => {
+        if (!included.has(b.id)) return;
+        const masterText = masterById.get(b.id) ?? b.text;
+        const entry: BulletToWrite = { ref: ref.get(b.id) ?? b.id, master: masterText };
+        if (b.text !== masterText) entry.current = b.text;
+        if (issues[b.id]) entry.issue = issues[b.id];
+        out.push(entry);
+    };
+    for (const w of source.work) for (const b of w.bullets) push(b);
+    for (const p of source.projects) for (const b of p.bullets) push(b);
     return out;
+}
+
+// Master with the user's current bullet text overlaid. Used so the guided
+// "tailor" phase rewrites what's on screen instead of silently reverting to
+// master, matching what the ATS / review phases already see.
+function withCurrentText(
+    master: MasterResume,
+    currentText: Record<string, string>,
+): MasterResume {
+    const pick = (b: { id: string; text: string }) => {
+        const cur = currentText[b.id];
+        return cur && cur.trim() ? { ...b, text: cur } : b;
+    };
+    return {
+        ...master,
+        work: master.work.map((w) => ({ ...w, bullets: w.bullets.map(pick) })),
+        projects: master.projects.map((p) => ({ ...p, bullets: p.bullets.map(pick) })),
+    };
 }
 
 type EditorOut = {
     approved: boolean;
     issues?: string[];
+    // per-bullet fixes, addressed by ref, so the next pass can rewrite only
+    // what's actually wrong instead of regenerating the whole draft
+    bulletIssues?: { ref?: string; issue?: string }[];
     notes?: string[];
     score?: number;
     scoreBreakdown?: string[];
@@ -1099,15 +1235,16 @@ async function recruiterNode(state: State): Promise<Partial<State>> {
 async function baselineNode(state: State): Promise<Partial<State>> {
     const selection = ensureValidSelection(state.masterResume, undefined);
     const draft = assembleContent(state.masterResume, selection, {});
-    const includedCount =
-        (draft.projects ?? []).flatMap((p) => p.bullets).filter((b) => !b.is_excluded).length +
-        (draft.work ?? []).flatMap((w) => w.bullets).filter((b) => !b.is_excluded).length;
     try {
         const { data, usage } = await callAgent<EditorOut>(
             "baseline",
             state.guidance,
             state.masterResume,
-            editorPrompt(state.jdText, draftForReview(draft), includedCount),
+            editorPrompt(
+                state.jdText,
+                draftForReview(state.masterResume, draft),
+                countIncluded(draft),
+            ),
             4096,
             state.llm,
         );
@@ -1124,6 +1261,9 @@ async function baselineNode(state: State): Promise<Partial<State>> {
 }
 
 async function hiringManagerNode(state: State): Promise<Partial<State>> {
+    // Loop entry point: everything up to the editor is one "pass", and its
+    // measured duration is what the time budget extrapolates from.
+    const passStartedAt = Date.now();
     try {
         const { data, usage } = await callAgent<Selection>(
             "hiringmanager",
@@ -1138,12 +1278,17 @@ async function hiringManagerNode(state: State): Promise<Partial<State>> {
                 state.masterResume,
                 translateSelection(state.masterResume, data),
             ),
+            passStartedAt,
             usage: [usage],
         };
     } catch (e) {
         // bad/unparseable selection -> fall back to a default so we never crash
         console.error("[hiringmanager] failed, using default selection:", e);
-        return { selection: ensureValidSelection(state.masterResume, undefined), usage: [] };
+        return {
+            selection: ensureValidSelection(state.masterResume, undefined),
+            passStartedAt,
+            usage: [],
+        };
     }
 }
 
@@ -1160,9 +1305,37 @@ async function atsNode(state: State): Promise<Partial<State>> {
 }
 
 async function contentWriterNode(state: State): Promise<Partial<State>> {
+    const included = state.selection?.includedBulletIds ?? [];
+    const isRewrite = state.iterations > 0;
+
+    // First pass writes everything from master. A rewrite refines the Writer's
+    // OWN previous draft — regenerating from master each pass threw away every
+    // bullet that was already good and made the loop resample rather than
+    // converge. Master still rides along as `provenance` so refining a rewrite
+    // can't drift away from facts the candidate actually has.
+    const source = isRewrite
+        ? withCurrentText(state.masterResume, state.tailoredText)
+        : state.masterResume;
+
+    let targets: string[];
+    if (!isRewrite) {
+        targets = included;
+    } else {
+        // Only touch what the Editor actually complained about, plus anything
+        // the Hiring Manager newly selected (which has no draft yet).
+        const flagged = included.filter((id) => state.editorBulletIssues[id]);
+        const undrafted = included.filter((id) => !state.tailoredText[id]);
+        targets = [...new Set([...flagged, ...undrafted])];
+        // Editor scored below the bar but named no bullet (or only structural
+        // problems): fall back to a full rewrite rather than doing nothing.
+        if (targets.length === 0) targets = included;
+    }
+
     const bulletsToWrite = bulletsToWriteFor(
+        source,
+        targets,
         state.masterResume,
-        state.selection?.includedBulletIds ?? [],
+        state.editorBulletIssues,
     );
     const { data, usage } = await callAgent<{
         bullets: { ref?: string; id?: string; text: string }[];
@@ -1176,7 +1349,10 @@ async function contentWriterNode(state: State): Promise<Partial<State>> {
             state.keywords,
             bulletsToWrite,
             state.editorFeedback,
-            !!state.hasSummary,
+            // Only on the first pass. The Editor never sees the summary
+            // (draftForReview covers skills/projects/work), so a rewrite has no
+            // feedback to act on and would just re-roll a good summary.
+            !!state.hasSummary && !isRewrite,
         ),
         16384,
         state.llm,
@@ -1186,10 +1362,35 @@ async function contentWriterNode(state: State): Promise<Partial<State>> {
 
     return {
         tailoredText: tailored,
-        tailoredSummary: (data.summary ?? "").trim(),
+        // a targeted rewrite pass may not restate the summary; keep the last
+        // good one rather than blanking it
+        tailoredSummary: (data.summary ?? "").trim() || state.tailoredSummary,
         iterations: state.iterations + 1,
         usage: [usage],
     };
+}
+
+// Should the loop stop, and why? Lives here (not in routeAfterEditor) because
+// only the editor node has the freshly measured score, and "the model omitted a
+// score" has to stay distinguishable from "the score didn't improve".
+function decideStop(
+    state: State,
+    freshScore: number | undefined,
+    passMs: number,
+): StopReason | null {
+    if (freshScore != null && freshScore >= SCORE_THRESHOLD) return "score-cleared";
+    // iterations counts Content Writer passes, already incremented for this one
+    if (state.iterations >= MAX_EDITOR_ITERATIONS) return "iteration-cap";
+    // No room for another hiringManager -> ats -> contentWriter -> editor pass
+    // before the function is killed. Stopping now returns a usable draft;
+    // getting killed mid-pass returns nothing at all.
+    if (state.deadlineAt && Date.now() + passMs > state.deadlineAt) return "time-budget";
+    // Plateau only counts when this pass actually produced a number to compare
+    // against. An omitted score is a failed measurement, not convergence.
+    if (freshScore != null && state.score != null && freshScore <= state.score) {
+        return "plateau";
+    }
+    return null;
 }
 
 async function editorNode(state: State): Promise<Partial<State>> {
@@ -1198,42 +1399,83 @@ async function editorNode(state: State): Promise<Partial<State>> {
         state.selection!,
         state.tailoredText,
     );
-    const includedCount =
-        (draft.projects ?? []).flatMap((p) => p.bullets).filter((b) => !b.is_excluded).length +
-        (draft.work ?? []).flatMap((w) => w.bullets).filter((b) => !b.is_excluded).length;
+    const passMs = state.passStartedAt ? Date.now() - state.passStartedAt : 0;
 
-    const { data, usage } = await callAgent<EditorOut>(
-        "editor",
-        state.guidance,
-        state.masterResume,
-        editorPrompt(state.jdText, draftForReview(draft), includedCount),
-        4096,
-        state.llm,
-    );
+    let data: EditorOut;
+    let usage: UsageEntry | undefined;
+    try {
+        const r = await callAgent<EditorOut>(
+            "editor",
+            state.guidance,
+            state.masterResume,
+            editorPrompt(
+                state.jdText,
+                draftForReview(state.masterResume, draft),
+                countIncluded(draft),
+            ),
+            4096,
+            state.llm,
+        );
+        data = r.data;
+        usage = r.usage;
+    } catch (e) {
+        // A failed QA pass must not throw away a finished draft. Stop the loop
+        // and hand back what the Content Writer produced, flagged as unreviewed.
+        console.error("[editor] scoring failed:", e);
+        return {
+            lastPassMs: passMs,
+            stopReason: "editor-error",
+            editorNotes: [
+                ...state.editorNotes,
+                "Editor QA pass failed; returning the last draft unreviewed.",
+            ],
+            usage: [],
+        };
+    }
+
+    const freshScore = typeof data.score === "number" ? data.score : undefined;
+
+    // refs -> UUIDs; anything the model invented is dropped rather than
+    // silently retargeting the wrong bullet
+    const refMap = refToId(state.masterResume);
+    const idSet = allBulletIds(state.masterResume);
+    const bulletIssues: Record<string, string> = {};
+    for (const bi of data.bulletIssues ?? []) {
+        const key = bi?.ref;
+        const issue = bi?.issue;
+        if (!key || !issue?.trim()) continue;
+        const uuid = refMap.get(key) ?? (idSet.has(key) ? key : undefined);
+        if (uuid) bulletIssues[uuid] = issue.trim();
+    }
 
     return {
         approved: !!data.approved,
         editorFeedback: data.issues ?? [],
+        editorBulletIssues: bulletIssues,
         editorNotes: data.notes ?? [],
-        // keep the previous pass's score if the model omitted it — the reducer
+        // keep the previous pass's score if the model omitted one — the reducer
         // overwrites, so undefined would wipe a valid earlier "after" number
-        score: typeof data.score === "number" ? data.score : state.score,
-        prevScore: state.score, // for plateau detection
+        score: freshScore ?? state.score,
         scoreBreakdown:
             data.scoreBreakdown && data.scoreBreakdown.length > 0
                 ? data.scoreBreakdown
                 : state.scoreBreakdown,
-        usage: [usage],
+        lastPassMs: passMs,
+        stopReason: decideStop(state, freshScore, passMs),
+        // this pass just ended, so the next one starts now. Needed because a
+        // "reword" pass skips hiringManagerNode, which is the other setter.
+        passStartedAt: Date.now(),
+        usage: usage ? [usage] : [],
     };
 }
 
-function routeAfterEditor(state: State): "rewrite" | "done" {
-    const score = state.score ?? 0;
-    if (score >= SCORE_THRESHOLD) return "done"; // cleared the bar
-    if (state.iterations >= MAX_EDITOR_ITERATIONS) return "done"; // cap reached
-    // plateau: last pass didn't improve, so another loop is unlikely to help
-    if (state.prevScore != null && score <= state.prevScore) return "done";
-    return "rewrite";
+function routeAfterEditor(state: State): "reselect" | "reword" | "done" {
+    if (state.stopReason) return "done";
+    // Structural feedback (wrong bullets chosen, bad order, page overflow) is
+    // the Hiring Manager's to fix. Pure wording fixes go straight back to the
+    // Writer: 2 LLM calls instead of 4, and it keeps a selection the reviewer
+    // already accepted from being reshuffled out from under the fix.
+    return state.editorFeedback.length > 0 ? "reselect" : "reword";
 }
 
 const workflow = new StateGraph(GraphState)
@@ -1253,9 +1495,10 @@ const workflow = new StateGraph(GraphState)
     .addEdge("ats", "contentWriter")
     .addEdge("contentWriter", "editor")
     .addConditionalEdges("editor", routeAfterEditor, {
-        // loop back to HM (not just the Writer) so selection/ordering feedback
-        // can be acted on; the linear edges re-run HM -> ATS -> Writer -> Editor
-        rewrite: "hiringManager",
+        // structural feedback re-runs HM -> ATS -> Writer -> Editor
+        reselect: "hiringManager",
+        // wording-only feedback skips straight to Writer -> Editor
+        reword: "contentWriter",
         done: END,
     })
     .compile();
@@ -1295,6 +1538,7 @@ function buildResult(final: State): RunResult {
         notes: final.selection?.rationale ?? [],
         editorNotes: final.editorNotes,
         iterations: final.iterations,
+        stopReason: final.stopReason ?? undefined,
         score: final.score,
         scoreBreakdown: final.scoreBreakdown,
         baselineScore: final.baselineScore,
@@ -1305,15 +1549,23 @@ function buildResult(final: State): RunResult {
     return { plan, usage: final.usage };
 }
 
-export async function runTailoringGraph(input: {
+export interface GraphInput {
     jdText: string;
     masterResume: MasterResume;
     guidance: Guidance;
     llm: ResolvedLLM;
     hasSummary?: boolean;
-}): Promise<RunResult> {
+    // absolute epoch ms the run must finish by; omit for no limit
+    deadlineAt?: number;
+}
+
+export async function runTailoringGraph(input: GraphInput): Promise<RunResult> {
     return buildResult(
-        (await workflow.invoke({ ...input, hasSummary: !!input.hasSummary })) as State,
+        (await workflow.invoke({
+            ...input,
+            hasSummary: !!input.hasSummary,
+            deadlineAt: input.deadlineAt ?? 0,
+        })) as State,
     );
 }
 
@@ -1321,18 +1573,16 @@ export async function runTailoringGraph(input: {
 // "updates" chunks name the node that just ran; "values" chunks carry the full
 // accumulated state (the last is final).
 export async function runTailoringGraphStreaming(
-    input: {
-        jdText: string;
-        masterResume: MasterResume;
-        guidance: Guidance;
-        llm: ResolvedLLM;
-        hasSummary?: boolean;
-    },
+    input: GraphInput,
     onProgress: (nodeKey: string) => void,
 ): Promise<RunResult> {
     let final: State | undefined;
     const stream = await workflow.stream(
-        { ...input, hasSummary: !!input.hasSummary },
+        {
+            ...input,
+            hasSummary: !!input.hasSummary,
+            deadlineAt: input.deadlineAt ?? 0,
+        },
         {
             streamMode: ["updates", "values"],
         },
@@ -1373,7 +1623,9 @@ export interface ScreenResult {
 }
 
 // Phase 1: Filter -> Recruiter -> Hiring Manager (selection only, master text)
-export async function runScreenPhase(input: PhaseInput): Promise<ScreenResult> {
+// Not an endpoint phase of its own: runCreatePhase wraps this with ATS gap
+// analysis, and that's the only caller.
+async function runScreenPhase(input: PhaseInput): Promise<ScreenResult> {
     const { jdText, masterResume: m, guidance: g, llm } = input;
     const usage: UsageEntry[] = [];
 
@@ -1426,17 +1678,27 @@ export interface TailorResult {
 
 // Phase 2: ATS -> Content Writer -> Editor; tailors + scores the phase-1 selection
 export async function runTailorPhase(
-    input: PhaseInput & { selection: Selection; hasSummary?: boolean },
+    input: PhaseInput & {
+        selection: Selection;
+        hasSummary?: boolean;
+        // bullet id -> the text currently on screen, when it differs from
+        // master (the user edited it between phases)
+        currentText?: Record<string, string>;
+    },
 ): Promise<TailorResult> {
     const { jdText, masterResume: m, guidance: g, selection, llm } = input;
     const hasSummary = !!input.hasSummary;
     const usage: UsageEntry[] = [];
 
+    // What the user is looking at. Everything downstream tailors this; `m` stays
+    // the factual anchor (and keeps the cached system prefix stable).
+    const view = input.currentText ? withCurrentText(m, input.currentText) : m;
+
     const ats = await callAgent<{ keywords: string[] }>(
         "ats", g, m, atsPrompt(jdText, selection), 2048, llm);
     usage.push(ats.usage);
 
-    const bulletsToWrite = bulletsToWriteFor(m, selection.includedBulletIds);
+    const bulletsToWrite = bulletsToWriteFor(view, selection.includedBulletIds, m);
     const cw = await callAgent<{
         bullets: { ref?: string; id?: string; text: string }[];
         summary?: string;
@@ -1452,13 +1714,18 @@ export async function runTailorPhase(
 
     const tailored = tailoredFromBullets(m, cw.data.bullets);
 
-    const content = assembleContent(m, selection, tailored);
-    const includedCount =
-        (content.projects ?? []).flatMap((p) => p.bullets).filter((b) => !b.is_excluded).length +
-        (content.work ?? []).flatMap((w) => w.bullets).filter((b) => !b.is_excluded).length;
+    // assemble against the view, so an included bullet the Writer skipped keeps
+    // the user's edit instead of reverting to master
+    const content = assembleContent(view, selection, tailored);
 
     const ed = await callAgent<EditorOut>(
-        "editor", g, m, editorPrompt(jdText, draftForReview(content), includedCount), 4096, llm);
+        "editor",
+        g,
+        m,
+        editorPrompt(jdText, draftForReview(m, content), countIncluded(content)),
+        4096,
+        llm,
+    );
     usage.push(ed.usage);
 
     return {

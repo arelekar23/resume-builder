@@ -37,11 +37,15 @@ idempotently and create `resume_versions`; `20260715120000` creates the
 
 ### Data-safety guards
 
-Tailoring reads `original_text` as the master. If a bullet's `original_text` is
-blank, the graph falls back to its current `text` (self-heal), and apply never
-writes empty text over existing content (`api/analyze.ts`), so a thin or empty
-model response can't blank the resume. Per-bullet "restore original" (↺) resets
-`text` back to `original_text`.
+Tailoring reads a bullet's current `text` as the master, falling back to
+`original_text` only when `text` is blank (`api/analyze.ts`). So the agents see
+the master exactly as the user last left it, and `original_text` is purely the
+restore point — per-bullet "restore original" (↺) resets `text` back to it.
+
+A thin or truncated model response can't blank a bullet. `tailoredFromBullets`
+drops any rewrite whose text is empty or whitespace, and `assembleContent` falls
+back to the source text with `||` (not `??`) on both the project and work
+branches, so a blank never reaches the DB.
 
 ## Version management
 
@@ -54,9 +58,12 @@ A resume version is a named snapshot of the tailored state, not the master.
 
 The data layer is `src/utils/versions.ts` (client-side supabase-js, RLS-scoped):
 `listVersions`, `getVersion`, `saveVersion`, `loadVersion`, `renameVersion`,
-`duplicateVersion`, `deleteVersion`. Loading a version overlays the tailored
-columns back onto the current rows; `original_text` is never touched. Versions
-are manual-only — nothing is auto-snapshotted on tailoring. UI is in
+`duplicateVersion`, `deleteVersion`. Loading a version overlays its tailored
+state onto the master rows **in memory only** (`buildVersionEditorState`) — the
+master rows are never written. While a version is active, the editor's autosave
+routes to `saveVersionState` instead of `saveState`, so edits land on the version
+and the master stays clean. Versions are manual-only — nothing is
+auto-snapshotted on tailoring. UI is in
 `src/components/VersionBar.tsx`.
 
 ## Agentic tailoring (`/api/analyze` + `api/tailoring-graph.ts`)
@@ -64,7 +71,10 @@ are manual-only — nothing is auto-snapshotted on tailoring. UI is in
 The tailoring endpoint is a 6-node LangGraph workflow exposed through two modes.
 Each node is one focused LLM call.
 
-- Filter — hard-blocker check against `filter-rules.md`; terminates early on skip.
+- Filter — advisory check for structurally bad postings (scams, body shops,
+  C2C-only). It never terminates the run and never blocks the user; the flag is
+  carried through to the UI. It deliberately ignores the candidate's personal
+  situation (visa, clearance, location, YOE), because the app does not know it.
 - Recruiter — 6-second fit read (first impression, verdict, working-for, gaps, role type).
 - Baseline — scores the untailored master (default selection, master text) against the JD, so the UI can show the before/after lift.
 - Hiring Manager — selects projects/bullets (page-fit ≤14) and skills-row order.
@@ -84,35 +94,102 @@ plateaus/caps out.
 
 ```mermaid
 flowchart TD
-    S([JD submitted]) --> F[Filter]
-    F -->|skip| E1([END · skip reason])
-    F -->|pass| R[Recruiter]
+    S([JD submitted]) --> F[Filter<br/>advisory flag only]
+    F --> R[Recruiter]
     R --> B[Baseline<br/>score master as-is]
     B --> H[Hiring Manager<br/>select ≤14 bullets]
     H --> A[ATS<br/>keywords to emphasize]
     A --> C[Content Writer<br/>rewrite bullets]
-    C --> ED[Editor<br/>score 0–100]
-    ED -->|"rewrite · else (re-select + rewrite)"| H
-    ED -->|"done · score ≥ 80, or 3 iterations, or plateau (score ≤ prev)"| E2([END])
+    C --> ED[Editor<br/>score 0–100 + per-bullet fixes]
+    ED -->|"reselect · structural feedback"| H
+    ED -->|"reword · per-bullet fixes only"| C
+    ED -->|"done · see stopReason"| E2([END])
 ```
+
+**The loop refines; it does not resample.** Two things make that true:
+
+- The Editor addresses fixes to a specific bullet by its `ref` token
+  (`bulletIssues: [{ref, issue}]`), so feedback is *addressable*. `draftForReview`
+  labels every bullet with its ref for exactly this reason — the Editor doesn't
+  receive the master snapshot, so without labels it can only produce prose that
+  names no bullet.
+- On a rewrite pass the Content Writer sources from its **own previous draft**
+  (`withCurrentText(master, tailoredText)`) and rewrites **only** the flagged
+  bullets, plus any the Hiring Manager newly selected. Every other bullet is
+  left byte-for-byte alone. True master rides along as `provenance` so refining
+  a rewrite can't drift off the candidate's real facts.
+
+Previously every pass regenerated all ~14 bullets from master, so a note like
+"add scale to the caching bullet" re-rolled thirteen bullets that were already
+fine. That is why passes plateaued: there was no memory of what already worked.
+
+Routing follows the same logic. `editorFeedback` (structural: wrong bullets,
+bad order, page overflow) routes to the Hiring Manager, because only it can
+re-select. Wording-only feedback routes straight back to the Writer — two LLM
+calls instead of four, and the accepted selection isn't reshuffled out from
+under the fix. If the Editor scores below the bar but names no bullet, the
+Writer falls back to a full rewrite rather than stalling.
 
 Thresholds from `tailoring-graph.ts`: `SCORE_THRESHOLD = 80`,
 `MAX_EDITOR_ITERATIONS = 3` (Content Writer runs up to 3 times, i.e. up to 2
-rewrites). Plateau = the latest score did not beat the previous pass.
+rewrites).
+
+`decideStop` is the single place that ends the loop, and it records **why** in
+`plan.stopReason` so the UI can tell "good enough" apart from "gave up":
+
+| `stopReason` | Meaning |
+| --- | --- |
+| `score-cleared` | Editor scored ≥ 80. The only success case. |
+| `iteration-cap` | Hit `MAX_EDITOR_ITERATIONS` without clearing the bar. |
+| `plateau` | The new score did not beat the previous one. |
+| `time-budget` | Another pass wouldn't fit before `maxDuration`. |
+| `editor-error` | The QA call failed; the draft is returned unreviewed. |
+
+The summary, when the resume has one, is written on the **first pass only**.
+`draftForReview` sends skills/projects/work, so the Editor never sees the
+summary and has no feedback to offer on it; re-rolling it each pass would risk
+a good summary for no signal.
+
+Two subtleties worth keeping:
+
+- **Plateau needs a fresh number.** If the Editor omits `score`, the previous
+  pass's number is retained for display but is *not* treated as a plateau —
+  a failed measurement is not convergence.
+- **The loop is time-budgeted.** `/api/analyze` passes `deadlineAt`, and the
+  loop stops once the last pass's measured duration wouldn't fit in the
+  remaining time. Without this a 3-iteration run makes up to 15 sequential LLM
+  calls, overruns `maxDuration: 60`, and the SSE stream dies before emitting
+  `result` — so the user watches the pipeline run and gets nothing. Note this
+  protects the *loop*, not the floor: if the prelude plus one pass alone exceeds
+  the limit, the function is still killed. Raising `maxDuration` and
+  `MAX_DURATION_S` in `api/analyze.ts` (together — Vercel parses the literal)
+  to 300 requires a Pro plan.
 
 ### Guided mode — user-triggered phases
 
 `src/components/GuidedTailor.tsx` drives the same agents as discrete phases the
 user triggers by hand, editing the resume in between. The `tailor` phase does
 not loop — it runs ATS → Content Writer → Editor once (the Editor score is
-informational, not a gate). The two review agents role-play the named company
-and run on the current resume view, not the master.
+informational, not a gate). The two review agents role-play the named company.
+
+**Every guided phase operates on the resume the user is currently looking at,
+not on master.** The reviews and the ATS re-check get the rendered view
+(`getCurrentResumeView`). The `tailor` phase gets `selection` plus
+`currentText` (`getCurrentBulletText` — bullet id → on-screen text), which the
+server overlays onto master (`withCurrentText`) before selecting bullets to
+rewrite and before assembling the result. This matters twice over: hand edits
+made between phases survive an Auto-tailor, and tailoring while a saved version
+is active rewrites *that version's* text rather than reverting to master.
+
+The Content Writer still receives the untouched `master` text alongside
+`current` for each edited bullet, and is told to rewrite `current` while
+treating `master` as the record of which facts are real — so respecting the
+user's edit doesn't licence inventing on top of it.
 
 ```mermaid
 flowchart TD
     subgraph P1["Phase: create — 'Create tailored version'"]
-        F[Filter] -->|skip| SK([END · skip reason])
-        F -->|pass| R[Recruiter] --> H[Hiring Manager] --> A["ATS · gap analysis<br/>score + present/missing"]
+        F[Filter<br/>advisory flag only] --> R[Recruiter] --> H[Hiring Manager] --> A["ATS · gap analysis<br/>score + present/missing"]
     end
     P1 --> V{{User edits resume by hand}}
     V --> T["Phase: tailor — 'Auto-tailor bullets'<br/>ATS → Content Writer → Editor<br/>(single pass, no loop)"]
@@ -126,28 +203,42 @@ not a ceiling. To maximize JD fit and ATS score, agents add relevant skills,
 tools, and keywords from the JD — including ones not in the master — woven into
 the existing experience. There is no separate "skills honesty" list.
 
-Prompt caching: the three guidance files + the master-resume snapshot form a
-shared, cached system prefix across all agents (two `ephemeral` breakpoints);
-only per-agent instructions + the JD vary, so agents 2–6 hit the cache.
+Prompt caching: the guidance file + the master-resume snapshot form a shared,
+cached system prefix across all agents (two `ephemeral` breakpoints); only
+per-agent instructions + the JD vary, so agents 2–6 hit the cache. The snapshot
+is always the true master, never the overlaid view, so the prefix stays stable
+across phases.
 
 ### Endpoint contract
 
 `POST /api/analyze` with `Authorization: Bearer <supabase jwt>`.
 
-```jsonc
-// Preview (runs the graph):
-{ "jdText": "…", "profileId": "…", "applyChanges": false }
+The endpoint is **read-only** — it runs agents and returns a plan, and never
+writes to the DB. Applying is entirely client-side (see below).
 
-// Apply (replays the previewed plan — the graph does NOT re-run):
-{ "profileId": "…", "applyChanges": true, "plan": { /* the plan from preview */ } }
+```jsonc
+// Quick mode (SSE: `progress` events per agent, then one `result`):
+{ "jdText": "…", "profileId": "…", "stream": true, "includeSummary": false }
+
+// Quick mode, non-streaming — same graph, single JSON response:
+{ "jdText": "…", "profileId": "…" }
+
+// Guided phases:
+{ "phase": "create",  "jdText": "…", "profileId": "…" }
+{ "phase": "tailor",  "jdText": "…", "profileId": "…",
+  "selection": { /* … */ }, "currentText": { "<bulletId>": "on-screen text" } }
+{ "phase": "ats" | "recruiterReview" | "hiringManagerReview",
+  "jdText": "…", "profileId": "…", "resume": { /* rendered view */ },
+  "companyName": "…" }
 ```
 
-Response `{ plan, applied, usage }`. The `plan` (also the object the frontend
-renders) carries per-agent reasoning:
+Response `{ plan, usage }` for the graph runs, or the phase result object for a
+`phase` request. The `plan` (also the object the frontend renders) carries
+per-agent reasoning:
 
 ```jsonc
 {
-  "filterResult": { "skip": false, "reason": "…" },
+  "filterResult": { "flagged": false, "reason": "…" },
   "fitAssessment": {
     "firstImpression": "…",
     "verdict": "apply",
@@ -169,12 +260,18 @@ renders) carries per-agent reasoning:
   "notes": ["…"],
   "editorNotes": ["…"],
   "iterations": 1,
+  "stopReason": "score-cleared",
 }
 ```
 
-The two-step flow is mandatory — nothing is auto-applied. Preview runs the graph
-once; Apply writes the stored plan. If `filterResult.skip` is true, the response
-carries only `filterResult` + `notes` and no DB writes happen.
+Nothing is auto-applied, and `/api/analyze` has no apply mode. The user reviews
+the plan and clicks Apply, which is handled on the client: `applyPlanToMaster`
+(`src/utils/versionConversion.ts`) overlays the plan onto the loaded master and
+`saveVersion` stores the result as a **new named version**, which the editor then
+switches to. The master rows are untouched either way.
+
+`filterResult.flagged` is advisory only — it is surfaced in the UI and never
+short-circuits the run or blocks applying.
 
 ### LLM (user-provided — no server default)
 
@@ -239,12 +336,16 @@ for an XSS payload to steal.
 
 ### Guidance directory (`api/guidance/`)
 
-Three hand-maintained markdown files, loaded at cold start
+One hand-maintained markdown file, loaded at cold start
 (`api/guidance-files.ts`) and cached in the prompt:
 
 - `tailoring-principles.md` — formatting, bolding, length targets, skills ordering
-- `filter-rules.md` — hard blockers (skip) and soft blockers (apply with framing)
-- `career-strategy.md` — visa timeline, role preferences, market context
+
+It is deliberately candidate-agnostic: it describes craft and the fixed
+constraints of the PDF template, and contains no facts about any specific
+user. Every candidate-specific fact reaches the agents through the
+master-resume snapshot instead. A missing file is non-fatal — the loader warns
+and substitutes an empty string, so tailoring quality drops but nothing breaks.
 
 Bundled via `vercel.json` (`functions["api/analyze.ts"].includeFiles`). Edit and
 redeploy; changes apply on the next cold start.

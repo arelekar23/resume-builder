@@ -17,17 +17,20 @@ export default function generateResumeHTML(
 
   // Links get an href but display the bare URL.
   const displayUrl = (u: string) =>
-    u.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+    u.trim().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/$/, "");
+  // Profiles are typically saved bare ("linkedin.com/in/me"), which a browser
+  // reads as a RELATIVE path — the link then resolves against the app's own
+  // origin instead of leaving the site. Always emit an absolute href.
+  const linkHref = (u: string) =>
+    /^[a-z][a-z0-9+.-]*:/i.test(u.trim()) ? u.trim() : `https://${u.trim()}`;
+  const link = (u: string) =>
+    `<a href="${linkHref(u)}" target="_blank" rel="noopener noreferrer">${displayUrl(u)}</a>`;
   const contactHTML = [
     personal.location,
     personal.email ? `<a href="mailto:${personal.email}">${personal.email}</a>` : "",
     personal.phone,
-    personal.linkedin_url
-      ? `<a href="${personal.linkedin_url}">${displayUrl(personal.linkedin_url)}</a>`
-      : "",
-    personal.github_url
-      ? `<a href="${personal.github_url}">${displayUrl(personal.github_url)}</a>`
-      : "",
+    personal.linkedin_url ? link(personal.linkedin_url) : "",
+    personal.github_url ? link(personal.github_url) : "",
   ]
     .filter((part) => part && part.trim())
     .join(" | ");
