@@ -390,6 +390,33 @@ async function paceCall(llm: ResolvedLLM): Promise<void> {
     if (wait > 0 && wait + MIN_CALL_BUDGET_MS <= msUntilDeadline()) await sleep(wait);
 }
 
+// A 429 that outlived the in-function retries. Carries the provider's own wait
+// so the endpoint can hand it to the client, which has no 60s ceiling and can
+// afford to sit out a full rate-limit window.
+export class RateLimitError extends Error {
+    readonly retryAfterMs: number;
+    constructor(message: string, retryAfterMs: number) {
+        super(message);
+        this.name = "RateLimitError";
+        this.retryAfterMs = retryAfterMs;
+    }
+}
+
+// How long the provider says to wait. Groq reports it in the error body
+// ("Please try again in 14.985s") and not always as a header, so read both.
+export function retryAfterMsFrom(res: Response, body: string): number {
+    const header = Number(res.headers.get("retry-after"));
+    if (Number.isFinite(header) && header > 0) return header * 1000;
+    const m = /try again in\s+([\d.]+)\s*(ms|s)\b/i.exec(body);
+    if (m) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n) && n > 0) {
+            return m[2].toLowerCase() === "ms" ? n : n * 1000;
+        }
+    }
+    return 0;
+}
+
 // retry 429 and 5xx with backoff, honoring Retry-After while time remains
 export async function fetchWithRetry(
     url: string,
@@ -401,10 +428,14 @@ export async function fetchWithRetry(
         const res = await fetch(url, init);
         if (res.status !== 429 && res.status < 500) return res;
         if (attempt >= maxRetries) return res;
-        const ra = Number(res.headers.get("retry-after"));
+        // clone: the caller still needs to read the body if we hand this back
+        const hinted =
+            res.status === 429
+                ? retryAfterMsFrom(res, await res.clone().text().catch(() => ""))
+                : 0;
         const waitMs =
-            Number.isFinite(ra) && ra > 0
-                ? Math.min(ra * 1000, MAX_RETRY_AFTER_MS)
+            hinted > 0
+                ? Math.min(hinted, MAX_RETRY_AFTER_MS)
                 : Math.min(1000 * 2 ** attempt, 8000);
         // Sleeping only pays off if the retried call can still run afterwards.
         if (waitMs + MIN_CALL_BUDGET_MS > msUntilDeadline()) return res;
@@ -563,6 +594,12 @@ export async function callAnthropic<T>(
         }),
     });
     const text = await response.text();
+    if (response.status === 429) {
+        throw new RateLimitError(
+            `[${agent}] Anthropic rate limit reached.`,
+            retryAfterMsFrom(response, text),
+        );
+    }
     if (!response.ok) {
         throw new Error(`[${agent}] Claude API ${response.status}: ${text.slice(0, 500)}`);
     }
@@ -653,6 +690,12 @@ export async function callOpenAICompatible<T>(
         // Record on the error path too: a failed call still spent tokens, and a
         // 429 in particular is the one most worth spacing away from.
         lastCallEndedAt = Date.now();
+    }
+    if (response.status === 429) {
+        throw new RateLimitError(
+            `[${agent}] ${llm.provider || "provider"} rate limit reached.`,
+            retryAfterMsFrom(response, text),
+        );
     }
     if (!response.ok) {
         throw new Error(`[${agent}] LLM ${response.status}: ${text.slice(0, 500)}`);

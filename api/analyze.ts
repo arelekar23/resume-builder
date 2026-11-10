@@ -14,6 +14,7 @@ import {
     resolveLLM,
     isLLMUsable,
     setRequestDeadline,
+    RateLimitError,
     type MasterResume,
     type Selection,
     type ResumeView,
@@ -226,7 +227,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                 );
                 send("result", { plan, usage });
             } catch (e) {
-                send("error", { error: (e as Error).message });
+                // Headers are already sent on this path, so the status can't
+                // change; carry the wait in the event payload instead.
+                send("error", {
+                    error: (e as Error).message,
+                    retryAfterMs: e instanceof RateLimitError ? e.retryAfterMs : undefined,
+                });
             }
             res.end();
             return;
@@ -242,6 +248,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
         return res.status(200).json({ plan, usage });
     } catch (err) {
+        // A rate limit is not a server fault, and it's the one error worth
+        // retrying verbatim. Pass the provider's own wait to the client, which
+        // isn't bound by maxDuration and can sit out a whole window.
+        if (err instanceof RateLimitError) {
+            if (err.retryAfterMs > 0) {
+                res.setHeader("Retry-After", Math.ceil(err.retryAfterMs / 1000));
+            }
+            return res.status(429).json({
+                error: err.message,
+                retryAfterMs: err.retryAfterMs,
+            });
+        }
         return res.status(500).json({ error: (err as Error).message });
     }
 }

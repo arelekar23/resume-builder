@@ -55,6 +55,28 @@ interface GuidedTailorProps {
   onApplySummary?: (summary: string) => void;
 }
 
+// A rate limit the server could not wait out inside its own 60s budget.
+// `retryAfterMs` is the provider's own figure, so waiting it out here is the
+// difference between a failed phase and a slow one.
+interface RateLimited extends Error {
+  retryAfterMs: number;
+}
+
+function rateLimitWaitMs(e: unknown): number {
+  const ms = (e as Partial<RateLimited> | null)?.retryAfterMs;
+  return typeof ms === "number" && ms > 0 ? ms : 0;
+}
+
+// Fallback when a 429 arrives with no usable figure anywhere. Most per-minute
+// windows are shorter than this, so it over-waits rather than retrying into
+// the same wall.
+const DEFAULT_RATE_LIMIT_WAIT_MS = 20_000;
+
+// Per-minute windows refill over a minute, so two escalating waits add up to
+// roughly one full window — enough for a whole phase to run again, not just
+// the single call the provider's own figure covers.
+const WINDOW_CLEAR_STEP_MS = 25_000;
+
 async function postJson<T>(body: Record<string, unknown>): Promise<T> {
   const {
     data: { session },
@@ -71,15 +93,38 @@ async function postJson<T>(body: Record<string, unknown>): Promise<T> {
   const raw = await res.text();
   if (!res.ok) {
     let msg = `Server responded ${res.status}`;
+    let retryAfterMs = 0;
     try {
       const j = JSON.parse(raw);
       if (j?.error) msg = typeof j.error === "string" ? j.error : JSON.stringify(j.error);
+      if (typeof j?.retryAfterMs === "number") retryAfterMs = j.retryAfterMs;
     } catch {
       if (raw) msg = raw.slice(0, 300);
     }
-    throw new Error(msg);
+    const err = new Error(msg) as RateLimited;
+    if (res.status === 429) {
+      const header = Number(res.headers.get("retry-after"));
+      err.retryAfterMs =
+        retryAfterMs ||
+        (Number.isFinite(header) && header > 0
+          ? header * 1000
+          : DEFAULT_RATE_LIMIT_WAIT_MS);
+    }
+    throw err;
   }
   return JSON.parse(raw) as T;
+}
+
+// Sleep `ms`, reporting whole seconds remaining so the UI can count down.
+async function waitOut(ms: number, onTick: (secondsLeft: number) => void) {
+  const until = Date.now() + ms;
+  for (; ;) {
+    const left = until - Date.now();
+    if (left <= 0) break;
+    onTick(Math.ceil(left / 1000));
+    await new Promise((r) => setTimeout(r, Math.min(1000, left)));
+  }
+  onTick(0);
 }
 
 function scoreColor(n: number) {
@@ -183,6 +228,8 @@ export default function GuidedTailor({
   const [jdText, setJdText] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // Seconds left on a rate-limit wait; 0 when not waiting.
+  const [retryIn, setRetryIn] = useState(0);
   const [flag, setFlag] = useState(""); // advisory filter concern; never blocks
   const [created, setCreated] = useState(false);
   const [company, setCompany] = useState("");
@@ -235,15 +282,33 @@ export default function GuidedTailor({
 
   const jd = () => jdText.trim();
 
+  // A phase is several agent calls, and a tight tokens-per-minute tier can run
+  // dry partway through. The server already retries what fits in its own
+  // budget; anything left over lands here, where waiting is free.
+  const MAX_RATE_LIMIT_RETRIES = 2;
+
   async function runAction<T>(name: string, fn: () => Promise<T>): Promise<T | undefined> {
     setBusy(name);
     setError("");
     try {
-      return await fn();
+      for (let attempt = 0; ; attempt++) {
+        try {
+          return await fn();
+        } catch (e) {
+          const hinted = rateLimitWaitMs(e);
+          if (!hinted || attempt >= MAX_RATE_LIMIT_RETRIES) throw e;
+          // The provider's figure is what it takes to fit ONE more call, but a
+          // retry re-runs every call in the phase. Honoring the hint alone
+          // retries straight back into the same wall, so escalate toward a
+          // whole window clearing instead.
+          await waitOut(Math.max(hinted, (attempt + 1) * WINDOW_CLEAR_STEP_MS), setRetryIn);
+        }
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(null);
+      setRetryIn(0);
     }
   }
 
@@ -337,6 +402,13 @@ export default function GuidedTailor({
           {busy === "create" ? <Loader2 className="animate-spin" /> : <Sparkles />}
           {busy === "create" ? "Creating…" : "Create tailored version"}
         </Button>
+        {retryIn > 0 && (
+          <div className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <Loader2 className="size-3.5 shrink-0 animate-spin" />
+            Your AI provider's rate limit is full. Waiting {retryIn}s, then
+            picking up where it left off.
+          </div>
+        )}
         {error && (
           <div className="rounded-lg bg-destructive/10 px-3 py-2 text-xs text-destructive">
             {error}
