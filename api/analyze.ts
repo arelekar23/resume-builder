@@ -13,6 +13,7 @@ import {
     runHiringManagerReview,
     resolveLLM,
     isLLMUsable,
+    setRequestDeadline,
     type MasterResume,
     type Selection,
     type ResumeView,
@@ -24,6 +25,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== "POST") {
         return res.status(405).json({ error: "Method not allowed" });
     }
+
+    // Every phase, not just the quick-mode graph: inter-call pacing and 429
+    // backoff both need to know how much of the function's budget is left.
+    setRequestDeadline(graphDeadline());
 
     const jdText = req.body?.jdText;
     const profileId = req.body?.profileId;

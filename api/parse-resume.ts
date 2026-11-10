@@ -6,6 +6,7 @@ import {
     isLLMUsable,
     callAnthropic,
     callOpenAICompatible,
+    setRequestDeadline,
 } from "./tailoring-graph.js";
 import { getUserId, loadUserKey } from "./keyVault.js";
 
@@ -71,6 +72,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method !== "POST") {
         return res.status(405).json({ error: "Method not allowed" });
     }
+
+    // Bounds the shared call layer's 429 backoff; text extraction eats into the
+    // same 60s, so leave more headroom here than the graph does.
+    setRequestDeadline(Date.now() + 45_000);
 
     const fileBase64 = req.body?.fileBase64 as string | undefined;
     const mediaType = (req.body?.mediaType as string | undefined) ?? "application/pdf";
