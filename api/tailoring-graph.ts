@@ -325,20 +325,78 @@ function minimalBlocks(
     return blocks;
 }
 
-// one rate-limited call must not consume the whole function budget: agents run
-// sequentially inside a single 60s maxDuration, and 3 retries honoring a 15s
-// Retry-After could sleep 45s and starve every agent downstream. Stop retrying
-// once the accumulated sleep would cross this, and let the caller see the error.
-const MAX_TOTAL_RETRY_SLEEP_MS = 8000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// retry 429 and 5xx with backoff, honoring Retry-After, within the sleep budget
+// Wall-clock cutoff for the whole HTTP request, set by the endpoint. Sleeping
+// past it only gets the function killed with nothing to show, so both the
+// pacing and the retry backoff below stop short of it rather than tracking
+// their own fixed budgets.
+let requestDeadlineAt = 0;
+
+// When the previous outbound call finished, for the pacing below.
+let lastCallEndedAt = 0;
+
+// Called once per request. Also clears the pacing clock: on a warm instance
+// `lastCallEndedAt` holds the tail of a PREVIOUS request, which would make the
+// first call of this one wait for a gap it has already served.
+export function setRequestDeadline(at: number): void {
+    requestDeadlineAt = at;
+    lastCallEndedAt = 0;
+}
+
+function msUntilDeadline(): number {
+    return requestDeadlineAt ? Math.max(0, requestDeadlineAt - Date.now()) : Infinity;
+}
+
+// Rough floor for one agent call, used to decide whether a sleep still leaves
+// room to make the call it is waiting for.
+const MIN_CALL_BUDGET_MS = 6000;
+
+// Longest Retry-After we'll honor. Providers sometimes name the full window
+// reset (30s+), which no 60s function can wait out and still finish.
+const MAX_RETRY_AFTER_MS = 15000;
+
+// Pacing between outbound calls.
+//
+// Free tiers meter tokens-per-minute as well as requests-per-minute, and every
+// agent prompt carries the resume. A guided phase fires three agents back to
+// back, so the burst lands inside one window and the third call 429s even
+// though no single call is large. Spacing the calls spreads a phase across more
+// of the window; the Retry-After handling below is what recovers when a window
+// is already spent.
+const PROVIDER_CALL_GAP_MS: Record<string, number> = {
+    groq: 2000,
+};
+const DEFAULT_CALL_GAP_MS = 500;
+
+function callGapMs(llm: ResolvedLLM): number {
+    // Anthropic meters per minute too, but the shared cached prefix means calls
+    // 2..n bill a fraction of their input tokens, so pacing buys little there.
+    if (llm.isAnthropic) return 0;
+    const where = `${llm.provider} ${llm.baseUrl}`.toLowerCase();
+    for (const [name, gap] of Object.entries(PROVIDER_CALL_GAP_MS)) {
+        if (where.includes(name)) return gap;
+    }
+    return DEFAULT_CALL_GAP_MS;
+}
+
+// Wait out the remaining gap since the previous call FINISHED. Measured from
+// the end rather than the start because a gap shorter than the call itself
+// would otherwise add no delay at all.
+async function paceCall(llm: ResolvedLLM): Promise<void> {
+    const gap = callGapMs(llm);
+    if (!gap || !lastCallEndedAt) return;
+    const wait = Math.min(gap - (Date.now() - lastCallEndedAt), gap);
+    if (wait > 0 && wait + MIN_CALL_BUDGET_MS <= msUntilDeadline()) await sleep(wait);
+}
+
+// retry 429 and 5xx with backoff, honoring Retry-After while time remains
 export async function fetchWithRetry(
     url: string,
     init: RequestInit,
     maxRetries = 3,
 ): Promise<Response> {
     let attempt = 0;
-    let sleptMs = 0;
     for (; ;) {
         const res = await fetch(url, init);
         if (res.status !== 429 && res.status < 500) return res;
@@ -346,12 +404,12 @@ export async function fetchWithRetry(
         const ra = Number(res.headers.get("retry-after"));
         const waitMs =
             Number.isFinite(ra) && ra > 0
-                ? Math.min(ra * 1000, 15000)
+                ? Math.min(ra * 1000, MAX_RETRY_AFTER_MS)
                 : Math.min(1000 * 2 ** attempt, 8000);
-        if (sleptMs + waitMs > MAX_TOTAL_RETRY_SLEEP_MS) return res;
+        // Sleeping only pays off if the retried call can still run afterwards.
+        if (waitMs + MIN_CALL_BUDGET_MS > msUntilDeadline()) return res;
         attempt++;
-        sleptMs += waitMs;
-        await new Promise((r) => setTimeout(r, waitMs));
+        await sleep(waitMs);
     }
 }
 
@@ -580,12 +638,21 @@ export async function callOpenAICompatible<T>(
             }),
         });
 
-    // some providers reject response_format; retry once without it
-    let response = await post(true);
-    let text = await response.text();
-    if (!response.ok && /response_format|json/i.test(text)) {
-        response = await post(false);
+    await paceCall(llm);
+    let response: Response;
+    let text: string;
+    try {
+        // some providers reject response_format; retry once without it
+        response = await post(true);
         text = await response.text();
+        if (!response.ok && /response_format|json/i.test(text)) {
+            response = await post(false);
+            text = await response.text();
+        }
+    } finally {
+        // Record on the error path too: a failed call still spent tokens, and a
+        // 429 in particular is the one most worth spacing away from.
+        lastCallEndedAt = Date.now();
     }
     if (!response.ok) {
         throw new Error(`[${agent}] LLM ${response.status}: ${text.slice(0, 500)}`);
