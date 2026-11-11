@@ -30,6 +30,123 @@ export interface ParsedResume {
     summary: string;
 }
 
+// One bullet (or the summary) checked against the text actually extracted from
+// the PDF. "altered" means the words are mostly the candidate's but the
+// sentence was rewritten; "absent" means it isn't in the PDF at all.
+export type Verdict = "verbatim" | "altered" | "absent";
+
+export interface ContentCheck {
+    section: "work" | "projects" | "summary";
+    entry: string;
+    entryIndex: number;
+    bulletIndex: number;
+    text: string;
+    verdict: Verdict;
+}
+
+export interface ParseVerification {
+    checked: number;
+    flagged: ContentCheck[];
+}
+
+// Fold away everything PDF extraction legitimately changes — ligatures, smart
+// quotes, dashes, soft hyphens, bullet glyphs, runs of whitespace — so a real
+// copy still compares equal and only genuine rewrites stand out.
+function normalize(s: string): string {
+    return s
+        .normalize("NFKD")
+        .replace(/[‘’‛′]/g, "'")
+        .replace(/[“”″]/g, '"')
+        .replace(/[‐-―−]/g, "-")
+        .replace(/­/g, "")
+        .replace(/[•▪◦·⁃]/g, " ")
+        .replace(/[^\p{L}\p{N}\s'"%$.,/+#&()-]/gu, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+}
+
+const SHINGLE = 5;
+
+// Verbatim text survives as contiguous word runs; a rewrite reuses the same
+// vocabulary but breaks nearly every run. Word-level overlap alone can't tell
+// those apart ("cut latency 40%" vs "reduced latency by 40%" share every
+// meaningful word), so compare consecutive 5-word shingles instead. A
+// hyphenation artifact costs a couple of shingles; a reworded sentence costs
+// almost all of them.
+function verdictFor(candidate: string, haystack: string): Verdict {
+    const text = normalize(candidate);
+    if (!text) return "absent";
+    if (haystack.includes(text)) return "verbatim";
+
+    const words = text.split(" ");
+    if (words.length < SHINGLE) {
+        // Too short to shingle: a substring miss is all the signal there is.
+        return "absent";
+    }
+    let found = 0;
+    const total = words.length - SHINGLE + 1;
+    for (let i = 0; i < total; i++) {
+        if (haystack.includes(words.slice(i, i + SHINGLE).join(" "))) found++;
+    }
+    const ratio = found / total;
+    if (ratio === 1) return "verbatim";
+    return ratio >= 0.6 ? "altered" : "absent";
+}
+
+// Check every bullet the model emitted against the PDF's own text. Titles and
+// education rows are deliberately skipped: the prompt tells the model to
+// COMPOSE those (role + company, degree + field + GPA), so they are expected
+// not to appear verbatim and flagging them would be noise.
+export function verifyParsed(parsed: ParsedResume, resumeText: string): ParseVerification {
+    const haystack = normalize(resumeText);
+    const flagged: ContentCheck[] = [];
+    let checked = 0;
+
+    const sections = [
+        { name: "work" as const, entries: parsed.work ?? [] },
+        { name: "projects" as const, entries: parsed.projects ?? [] },
+    ];
+    for (const { name, entries } of sections) {
+        entries.forEach((entry, entryIndex) => {
+            (entry.bullets ?? []).forEach((text, bulletIndex) => {
+                if (!text || !text.trim()) return;
+                checked++;
+                const verdict = verdictFor(text, haystack);
+                if (verdict !== "verbatim") {
+                    flagged.push({
+                        section: name,
+                        entry: entry.title ?? "",
+                        entryIndex,
+                        bulletIndex,
+                        text,
+                        verdict,
+                    });
+                }
+            });
+        });
+    }
+
+    // The summary is prose the model is told to copy verbatim or leave empty,
+    // so an invented one is the same failure as an invented bullet.
+    if (parsed.summary && parsed.summary.trim()) {
+        checked++;
+        const verdict = verdictFor(parsed.summary, haystack);
+        if (verdict !== "verbatim") {
+            flagged.push({
+                section: "summary",
+                entry: "Summary",
+                entryIndex: 0,
+                bulletIndex: 0,
+                text: parsed.summary,
+                verdict,
+            });
+        }
+    }
+
+    return { checked, flagged };
+}
+
 const SYSTEM =
     "You extract structured data from resume text. Return ONLY the requested " +
     "JSON. Copy content VERBATIM from the resume; never invent, embellish, or " +
@@ -132,7 +249,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
                   llm,
               );
 
-        return res.status(200).json({ parsed: data });
+        // Checked here, not on the client: this is the only place that still
+        // holds the PDF's own text to compare against.
+        return res.status(200).json({
+            parsed: data,
+            verification: verifyParsed(data, resumeText),
+        });
     } catch (err) {
         return res.status(500).json({ error: (err as Error).message });
     }
