@@ -30,6 +30,8 @@ export interface BulletStateSnapshot {
     // versions could carry net-new content.
     parent_id?: string;
     text: string;
+    // Drafting labels. Absent on older snapshots → falls back to master tags.
+    tags?: string[];
     is_excluded: boolean;
     position: number;
 }
@@ -49,6 +51,12 @@ export interface StateSnapshot {
     // The version's tailored summary. Overlays the master base; absent/"" falls
     // back to master. Column ships in a later migration (graceful fallback).
     summary: string;
+}
+
+function withTags(b: Bullet, tags: string[] | undefined): Bullet {
+    const { tags: _drop, ...rest } = b;
+    void _drop;
+    return tags && tags.length > 0 ? { ...rest, tags } : rest;
 }
 
 // Editor state -> the snapshot arrays stored on a version row.
@@ -74,6 +82,7 @@ export function stateToSnapshot(state: ResumeState): StateSnapshot {
                     kind: "project" as const,
                     parent_id: p.id,
                     text: b.text,
+                    tags: b.tags ?? [],
                     is_excluded: state.excluded_bullets.includes(b.id),
                     position: i,
                 })),
@@ -84,6 +93,7 @@ export function stateToSnapshot(state: ResumeState): StateSnapshot {
                     kind: "work" as const,
                     parent_id: w.id,
                     text: b.text,
+                    tags: b.tags ?? [],
                     is_excluded: state.excluded_bullets.includes(b.id),
                     position: i,
                 })),
@@ -131,7 +141,10 @@ export function overlayVersionOnMaster(
         for (const b of masterBullets) {
             seen.add(b.id);
             out.push({
-                bullet: { ...b, text: bMap.get(b.id)?.text ?? b.text },
+                bullet: withTags(
+                    { ...b, text: bMap.get(b.id)?.text ?? b.text },
+                    bMap.get(b.id)?.tags ?? b.tags,
+                ),
                 pos: POS(bMap.get(b.id)?.position),
             });
         }
@@ -139,7 +152,7 @@ export function overlayVersionOnMaster(
             if (seen.has(sb.id)) continue;
             seen.add(sb.id);
             out.push({
-                bullet: { id: sb.id, text: sb.text, original_text: "" },
+                bullet: withTags({ id: sb.id, text: sb.text, original_text: "" }, sb.tags),
                 pos: POS(sb.position),
             });
         }

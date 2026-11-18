@@ -25,6 +25,76 @@ const EMPTY_STATE: ResumeState = {
 // saveState diffs against this so we only write what actually changed.
 let lastSaved: ResumeState | null = null;
 let cachedProfileId: string | null = null;
+// False until migration 20261118120000_add_bullet_tags is applied; we then
+// load/save without tags instead of breaking the editor.
+let hasTagsColumn = true;
+
+type BulletRow = {
+    id: string;
+    text: string;
+    original_text: string;
+    position: number;
+    is_excluded: boolean;
+    tags?: string[] | null;
+    project_id?: string;
+    work_id?: string;
+};
+
+async function selectBullets(
+    table: "project_bullets" | "work_bullets",
+    parentCol: "project_id" | "work_id",
+): Promise<{ data: (BulletRow & { project_id: string; work_id: string })[] | null; error: unknown }> {
+    const base = `id, ${parentCol}, text, original_text, position, is_excluded`;
+    if (hasTagsColumn) {
+        const res = await supabase
+            .from(table)
+            .select(`${base}, tags`)
+            .order("position", { ascending: true });
+        if (!res.error) return res as never;
+        if (res.error.code !== "42703" && !res.error.message?.includes("tags")) {
+            return res as never;
+        }
+        console.warn(
+            `${table}.tags missing — apply migration 20261118120000_add_bullet_tags. ` +
+                "Bullet tags won't persist until then.",
+        );
+        hasTagsColumn = false;
+    }
+    const res = await supabase
+        .from(table)
+        .select(base)
+        .order("position", { ascending: true });
+    return res as never;
+}
+
+function rowToBullet(row: BulletRow): Bullet {
+    const b: Bullet = { id: row.id, text: row.text, original_text: row.original_text };
+    if (row.tags && row.tags.length > 0) b.tags = row.tags;
+    return b;
+}
+
+function tagsEqual(a?: string[], b?: string[]): boolean {
+    const x = a ?? [];
+    const y = b ?? [];
+    return x.length === y.length && x.every((t, i) => t === y[i]);
+}
+
+// Insert row for a bullet; tags only when the column exists.
+function bulletInsertRow(
+    b: Bullet,
+    parent: { project_id: string } | { work_id: string },
+    position: number,
+): Record<string, unknown> {
+    const row: Record<string, unknown> = {
+        id: b.id,
+        ...parent,
+        text: b.text,
+        original_text: b.text,
+        position,
+    };
+    if (hasTagsColumn && b.tags && b.tags.length > 0) row.tags = b.tags;
+    return row;
+}
 
 async function getProfileId(): Promise<string | null> {
     if (cachedProfileId) return cachedProfileId;
@@ -60,19 +130,13 @@ export async function loadState(): Promise<ResumeState | null> {
                 .select("id, title, date, is_selected, position")
                 .eq("profile_id", profileId)
                 .order("position", { ascending: true }),
-            supabase
-                .from("project_bullets")
-                .select("id, project_id, text, original_text,position, is_excluded")
-                .order("position", { ascending: true }),
+            selectBullets("project_bullets", "project_id"),
             supabase
                 .from("work")
                 .select("id, title, date, position")
                 .eq("profile_id", profileId)
                 .order("position", { ascending: true }),
-            supabase
-                .from("work_bullets")
-                .select("id, work_id, text, original_text, position, is_excluded")
-                .order("position", { ascending: true }),
+            selectBullets("work_bullets", "work_id"),
             supabase
                 .from("skills")
                 .select("category, items, position, is_selected")
@@ -99,14 +163,14 @@ export async function loadState(): Promise<ResumeState | null> {
         const projectBulletsByProject = new Map<string, Bullet[]>();
         for (const row of projectBulletRows ?? []) {
             const list = projectBulletsByProject.get(row.project_id) ?? [];
-            list.push({ id: row.id, text: row.text, original_text: row.original_text });
+            list.push(rowToBullet(row));
             projectBulletsByProject.set(row.project_id, list);
         }
 
         const workBulletsByJob = new Map<string, Bullet[]>();
         for (const row of workBulletRows ?? []) {
             const list = workBulletsByJob.get(row.work_id) ?? [];
-            list.push({ id: row.id, text: row.text, original_text: row.original_text });
+            list.push(rowToBullet(row));
             workBulletsByJob.set(row.work_id, list);
         }
 
@@ -192,12 +256,9 @@ export async function saveState(state: ResumeState): Promise<void> {
                 if (p.bullets.length > 0) {
                     ops.push(
                         supabase.from("project_bullets").insert(
-                            p.bullets.map((text, bIdx) => ({
-                                project_id: p.id,
-                                text,
-                                original_text: text,
-                                position: bIdx,
-                            })),
+                            p.bullets.map((b, bIdx) =>
+                                bulletInsertRow(b, { project_id: p.id }, bIdx),
+                            ),
                         ),
                     );
                 }
@@ -224,13 +285,9 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 .filter(({ b }) => !prevById.has(b.id));
                             if (inserts.length > 0) {
                                 await supabase.from("project_bullets").insert(
-                                    inserts.map(({ b, idx }) => ({
-                                        id: b.id,
-                                        project_id: p.id,
-                                        text: b.text,
-                                        original_text: b.text,
-                                        position: idx,
-                                    })),
+                                    inserts.map(({ b, idx }) =>
+                                        bulletInsertRow(b, { project_id: p.id }, idx),
+                                    ),
                                 );
                             }
 
@@ -243,6 +300,8 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 const wasExcluded = baseline.excluded_bullets.includes(b.id);
                                 const patch: Record<string, unknown> = {};
                                 if (prevBullet.text !== b.text) patch.text = b.text;
+                                if (hasTagsColumn && !tagsEqual(prevBullet.tags, b.tags))
+                                    patch.tags = b.tags ?? [];
                                 if (prevIdx !== idx) patch.position = idx;
                                 if (wasExcluded !== isExcludedNow) patch.is_excluded = isExcludedNow;
                                 if (Object.keys(patch).length > 0) {
@@ -306,12 +365,9 @@ export async function saveState(state: ResumeState): Promise<void> {
                 if (w.bullets.length > 0) {
                     ops.push(
                         supabase.from("work_bullets").insert(
-                            w.bullets.map((text, bIdx) => ({
-                                work_id: w.id,
-                                text,
-                                original_text: text,
-                                position: bIdx,
-                            })),
+                            w.bullets.map((b, bIdx) =>
+                                bulletInsertRow(b, { work_id: w.id }, bIdx),
+                            ),
                         ),
                     );
                 }
@@ -336,13 +392,9 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 .filter(({ b }) => !prevById.has(b.id));
                             if (inserts.length > 0) {
                                 await supabase.from("work_bullets").insert(
-                                    inserts.map(({ b, idx }) => ({
-                                        id: b.id,
-                                        work_id: w.id,
-                                        text: b.text,
-                                        original_text: b.text,
-                                        position: idx,
-                                    })),
+                                    inserts.map(({ b, idx }) =>
+                                        bulletInsertRow(b, { work_id: w.id }, idx),
+                                    ),
                                 );
                             }
 
@@ -355,6 +407,8 @@ export async function saveState(state: ResumeState): Promise<void> {
                                 const wasExcluded = baseline.excluded_bullets.includes(b.id);
                                 const patch: Record<string, unknown> = {};
                                 if (prevBullet.text !== b.text) patch.text = b.text;
+                                if (hasTagsColumn && !tagsEqual(prevBullet.tags, b.tags))
+                                    patch.tags = b.tags ?? [];
                                 if (prevIdx !== idx) patch.position = idx;
                                 if (wasExcluded !== isExcludedNow) patch.is_excluded = isExcludedNow;
                                 if (Object.keys(patch).length > 0) {
@@ -473,7 +527,12 @@ export async function saveState(state: ResumeState): Promise<void> {
 function bulletsEqual(a: Bullet[], b: Bullet[]): boolean {
     if (a.length !== b.length) return false;
     for (let i = 0; i < a.length; i++) {
-        if (a[i].id !== b[i].id || a[i].text !== b[i].text) return false;
+        if (
+            a[i].id !== b[i].id ||
+            a[i].text !== b[i].text ||
+            !tagsEqual(a[i].tags, b[i].tags)
+        )
+            return false;
     }
     return true;
 }

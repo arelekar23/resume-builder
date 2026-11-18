@@ -14,6 +14,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import InlineText from "./InlineText";
+import { BulletTagEditor } from "./BulletTags";
+import { useBulletTags } from "./bulletTagContext";
 import { ec } from "../lib/editorTheme";
 import type { ProjectEntry, WorkEntry, Bullet } from "../data/resumeData";
 
@@ -41,6 +43,13 @@ export default function EntryEditor({
   function updateBullet(i: number, v: string) {
     const b = entry.bullets.map((bullet, j) =>
       j === i ? { ...bullet, text: v } : bullet,
+    );
+    onChange({ ...entry, bullets: b });
+  }
+
+  function updateBulletTags(i: number, tags: string[]) {
+    const b = entry.bullets.map((bullet, j) =>
+      j === i ? { ...bullet, tags } : bullet,
     );
     onChange({ ...entry, bullets: b });
   }
@@ -130,6 +139,7 @@ export default function EntryEditor({
               isExcluded={excludedBullets.has(b.id)}
               onToggleExclude={() => toggleBulletExcluded(b.id)}
               onUpdate={(v) => updateBullet(i, v)}
+              onTagsChange={(t) => updateBulletTags(i, t)}
               onRestore={() => restoreBullet(i)}
               onRemove={() => removeBullet(i)}
             />
@@ -178,6 +188,7 @@ interface SortableBulletProps {
   isExcluded: boolean;
   onToggleExclude: () => void;
   onUpdate: (v: string) => void;
+  onTagsChange: (tags: string[]) => void;
   onRestore: () => void;
   onRemove: () => void;
 }
@@ -187,9 +198,14 @@ function SortableBullet({
   isExcluded,
   onToggleExclude,
   onUpdate,
+  onTagsChange,
   onRestore,
   onRemove,
 }: SortableBulletProps) {
+  const { focusTag } = useBulletTags();
+  const tags = bullet.tags ?? [];
+  const matchesFocus = focusTag !== null && tags.includes(focusTag);
+  const dimmedByFocus = focusTag !== null && !matchesFocus;
   const {
     attributes,
     listeners,
@@ -205,8 +221,13 @@ function SortableBullet({
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isDragging ? 0.5 : isExcluded ? 0.4 : 1,
-    background: isDragging ? ec.muted : "transparent",
+    opacity: isDragging ? 0.5 : isExcluded || dimmedByFocus ? 0.4 : 1,
+    background: isDragging
+      ? ec.muted
+      : matchesFocus
+        ? ec.primaryTint
+        : "transparent",
+    borderRadius: 4,
     display: "flex",
     alignItems: "flex-start",
     gap: 4,
@@ -214,7 +235,7 @@ function SortableBullet({
   } as const;
 
   return (
-    <div ref={setNodeRef} style={style}>
+    <div ref={setNodeRef} style={style} className="group">
       <span
         {...attributes}
         {...listeners}
@@ -246,6 +267,7 @@ function SortableBullet({
           onChange={onUpdate}
           placeholder="Type bullet here..."
         />
+        <BulletTagEditor tags={tags} onChange={onTagsChange} />
       </div>
       {canRestore && (
         <button

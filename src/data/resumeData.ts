@@ -1,4 +1,10 @@
-export type Bullet = { id: string; text: string; original_text: string };
+export type Bullet = {
+    id: string;
+    text: string;
+    original_text: string;
+    // Private drafting labels (e.g. role focus). Never rendered on the resume.
+    tags?: string[];
+};
 
 export interface ProjectEntry {
     id: string;

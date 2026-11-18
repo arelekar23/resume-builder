@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import {
   type ProjectEntry,
   type WorkEntry,
@@ -37,6 +37,7 @@ import GuidedTailor from "./../components/GuidedTailor";
 import ApiSettings from "./../components/ApiSettings";
 import ProjectsTab from "./../components/ProjectsTab";
 import ExperienceTab from "./../components/ExperienceTab";
+import { BulletTagProvider, TagFilterBar } from "./../components/BulletTags";
 import SkillsTab from "./../components/SkillsTab";
 import SummaryTab from "./../components/SummaryTab";
 import SectionOrder from "./../components/SectionOrder";
@@ -111,6 +112,10 @@ export default function Editor() {
   const [projects, setProjects] = useState<ProjectEntry[]>([]);
   const [skills, setSkills] = useState<SkillsMap>({});
   const [work, setWork] = useState<WorkEntry[]>([]);
+  const allBullets = useMemo(
+    () => [...projects, ...work].flatMap((e) => e.bullets),
+    [projects, work],
+  );
   // Personal info + education come from the DB (the Profile page edits them).
   const [personal, setPersonal] = useState<PersonalInfo>(EMPTY_PERSONAL_INFO);
   const [education, setEducation] = useState<EducationRow[]>([]);
@@ -878,6 +883,10 @@ export default function Editor() {
                 isVersion={!!activeVersionId}
               />
             )}
+            <BulletTagProvider bullets={allBullets}>
+            {(section === "projects" || section === "experience") && (
+              <TagFilterBar />
+            )}
             {section === "projects" && (
               <ProjectsTab
                 projects={sortedProjects}
@@ -902,6 +911,7 @@ export default function Editor() {
                 reorderWork={reorderWork}
               />
             )}
+            </BulletTagProvider>
             {section === "skills" && (
               <SkillsTab
                 skills={skills}
